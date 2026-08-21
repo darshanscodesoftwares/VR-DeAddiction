@@ -1,0 +1,60 @@
+# ---- Unity generated ----------------------------------------------------
+# All of this is rebuilt from Assets/, Packages/ and ProjectSettings/.
+# Library alone is ~5.5 GB and must never be committed.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Unity writes these next to the project
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Crash / assembly reports
+sysinfo.txt
+crashlytics-build.properties
+
+# ---- Android / Gradle / Ninja build output ------------------------------
+.utmp/
+*.apk
+*.aab
+*.apk.stale
+*.keystore
+*.jks
+
+# ---- Other VCS and tooling ----------------------------------------------
+.plastic/
+plastic.selector
+plastic.wktree
+plastic.workspace
+
+# ---- macOS / editors -----------------------------------------------------
+.DS_Store
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# ---- Blender ------------------------------------------------------------
+*.blend1
+*.blend2
+BlenderAssets/renders/
+
+# Unity crash-recovery copies -- derived junk, not source
+/[Aa]ssets/_Recovery/

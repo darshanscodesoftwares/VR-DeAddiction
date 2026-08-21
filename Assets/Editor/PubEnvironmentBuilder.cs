@@ -1,0 +1,2295 @@
+// PubEnvironmentBuilder.cs
+//
+// Generates a lightweight TASMAC-style Indian bar/pub environment from Unity
+// built-in primitives and flat Standard-shader materials.
+//
+//   Tools > Pub Environment > Build      (clears, then rebuilds)
+//   Tools > Pub Environment > Clear      (removes generated geometry only)
+//
+// No packages, no textures, no render-pipeline changes, no VR code.
+// Tune the constants in the PARAMETERS region and hit Build again.
+
+using System.Collections.Generic;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+
+public static class PubEnvironmentBuilder
+{
+    const string RootName = "PubEnvironment_IN";
+    const string LegacyRootName = "PubEnvironment";
+    const string MaterialFolder = "Assets/PubEnvironment/Materials";
+
+    #region PARAMETERS ---------------------------------------------------------
+
+    // Hall interior. X = width, Z = depth (you enter from -Z and look down +Z).
+    const float HallWidth = 12f;
+    const float HallDepth = 20f;
+    const float EavesHeight = 3.8f;   // underside of truss bottom chord
+    const float RidgeRise = 0.7f;     // shallow pitch, as in the references
+    const float WallThickness = 0.25f;
+    const float DadoHeight = 1.10f;   // painted lower band on the walls
+
+    const int TrussCount = 6;
+    const float RoofRibSpacing = 0.6f; // raise this to cut object count
+    const bool  RoofSkylights = false; // false = sealed roof, bulb-lit interior
+
+    const int TableCols = 3;
+    const int TableRows = 4;
+    const int ChairsPerTable = 2;
+
+    const int Seed = 20260814;        // fixed so rebuilds are identical
+
+    // Compound / exterior yard
+    const float YardSide  = 5f;       // clearance each side of the building
+    const float YardFront = 8f;       // approach yard depth in front of building
+    const float YardBack  = 2f;       // space behind building
+    const float CompoundWallH = 2.5f; // compound boundary wall height
+    const float CompoundWallT = 0.20f;
+    const float GateOpeningW  = 3.8f; // entrance gate width
+
+    // Player rig produced by Build().
+    //   Desktop = keyboard/mouse walkthrough for reviewing the scene on the Mac
+    //   VR      = OpenXR rig for the headset (see XRRigBuilder.cs)
+    public enum RigMode { Desktop, VR }
+    // static readonly, not const: with a const the compiler folds the comparison
+    // in BuildPlayer and reports the desktop branch as unreachable (CS0162).
+    static readonly RigMode PlayerRig = RigMode.VR;
+
+    #endregion
+
+    static float HalfW { get { return HallWidth * 0.5f; } }
+    static float HalfD { get { return HallDepth * 0.5f; } }
+    static float RidgeHeight { get { return EavesHeight + RidgeRise; } }
+
+    // Compound extents (computed from hall size + yard padding).
+    static float YardHalfW  { get { return HalfW + WallThickness + YardSide; } }
+    static float YardFrontZ { get { return -(HalfD + WallThickness + YardFront); } }
+    static float YardBackZ  { get { return HalfD + WallThickness + YardBack; } }
+
+    static System.Random _rng;
+    static Dictionary<string, Material> _mats;
+    static List<Vector3> _tableTops;   // so clutter lands on tables, not mid-air
+    static int _objectCount;
+    static int _triangleCount;
+
+    static UnityEngine.SceneManagement.Scene ActiveScene
+    {
+        get { return UnityEngine.SceneManagement.SceneManager.GetActiveScene(); }
+    }
+
+    // ------------------------------------------------------------------ menu
+
+    [MenuItem("Tools/Pub Environment/Build", false, 0)]
+    public static void Build()
+    {
+        Clear();
+
+        _rng = new System.Random(Seed);
+        _mats = new Dictionary<string, Material>();
+        _tableTops = new List<Vector3>();
+        _objectCount = 0;
+        _triangleCount = 0;
+        _grabbableCount = 0;
+        _brands = null;   // rebuilt against this run's materials
+
+        CreateMaterials();
+
+        GameObject root = new GameObject(RootName);
+        root.transform.position = Vector3.zero;
+
+        BuildShell(Group(root.transform, "01_Shell"));
+        BuildRoofStructure(Group(root.transform, "02_RoofStructure"));
+        BuildServiceArea(Group(root.transform, "03_ServiceArea"));
+        BuildSeating(Group(root.transform, "04_Seating"));
+        BuildFixtures(Group(root.transform, "05_Fixtures"));
+        BuildSignage(Group(root.transform, "06_Signage"));
+        BuildClutter(Group(root.transform, "07_Clutter"));
+        BuildLighting(Group(root.transform, "08_Lighting"));
+        BuildCompound(Group(root.transform, "10_Compound"));
+
+        GameObject scenario = PubScenarioBuilder.Build(
+            root.transform,
+            M,
+            (asset, parent, pos, yaw, mat, isStatic) =>
+                Model(asset, parent, pos, yaw, mat, isStatic),
+            (t, radius, height, mass) => GrabbableUpright(t, radius, height, mass),
+            (asset, parent, pos, yaw, mat, isStatic, slots) =>
+                Model(asset, parent, pos, yaw, mat, isStatic, slots));
+
+        BuildPlayer(Group(root.transform, "09_Player"));
+
+        WireScenario(root, scenario);
+
+        ConfigureRenderSettings();
+
+        EditorSceneManager.MarkSceneDirty(ActiveScene);
+        Selection.activeGameObject = root;
+
+        Debug.Log(string.Format(
+            "[PubEnvironment] Built {0} objects, ~{1:n0} triangles, {2} materials, " +
+            "{6} grabbable. Hall {3}x{4}m, eaves {5}m.",
+            _objectCount, _triangleCount, _mats.Count, HallWidth, HallDepth, EavesHeight,
+            _grabbableCount));
+    }
+
+    /// Headless entry point:
+    ///   Unity -batchmode -quit -projectPath "<proj>" \
+    ///         -executeMethod PubEnvironmentBuilder.BuildBatch -logFile -
+    /// Opens the target scene, builds, and saves. Only needed for command-line
+    /// runs; in the editor just use Tools > Pub Environment > Build.
+    public static void BuildBatch()
+    {
+        const string scenePath = "Assets/unity-VR.unity";
+        UnityEngine.SceneManagement.Scene scene =
+            EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+
+        Build();
+
+        bool saved = EditorSceneManager.SaveScene(scene, scenePath);
+        AssetDatabase.SaveAssets();
+        Debug.Log("[PubEnvironment] BuildBatch saved=" + saved + " -> " + scenePath);
+    }
+
+    /// Headless preview render. Writes PNGs of a few fixed viewpoints so the
+    /// environment can be checked without opening the editor.
+    ///   Unity -batchmode -quit -projectPath "<proj>" \
+    ///         -executeMethod PubEnvironmentBuilder.CaptureBatch -outDir /some/dir
+    public static void CaptureBatch()
+    {
+        EditorSceneManager.OpenScene("Assets/unity-VR.unity", OpenSceneMode.Single);
+
+        string outDir = "/tmp";
+        string[] argv = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < argv.Length - 1; i++)
+            if (argv[i] == "-outDir") outDir = argv[i + 1];
+
+        GameObject camGo = GameObject.Find("Main Camera");
+        if (camGo == null) { Debug.LogError("[PubEnvironment] No Main Camera."); return; }
+        Camera cam = camGo.GetComponent<Camera>();
+        if (cam == null) { Debug.LogError("[PubEnvironment] Main Camera has no Camera."); return; }
+
+        var shots = new[]
+        {
+            new { name = "01_entrance", pos = new Vector3(0f, 1.6f, -HalfD + 1.0f),  rot = new Vector3(2f, 0f, 0f) },
+            new { name = "02_midhall",  pos = new Vector3(-2.2f, 1.6f, -2.0f),       rot = new Vector3(3f, 22f, 0f) },
+            new { name = "03_counter",  pos = new Vector3(-1.5f, 1.6f, 3.0f),        rot = new Vector3(4f, 28f, 0f) },
+            new { name = "04_roof",     pos = new Vector3(0f, 1.5f, 0f),             rot = new Vector3(-32f, 5f, 0f) },
+            new { name = "05_wide",     pos = new Vector3(4.6f, 2.4f, -8.4f),        rot = new Vector3(8f, -24f, 0f) },
+        };
+
+        const int W = 1280, H = 720;
+        foreach (var s in shots)
+        {
+            cam.transform.position = s.pos;
+            cam.transform.eulerAngles = s.rot;
+
+            RenderTexture rt = new RenderTexture(W, H, 24, RenderTextureFormat.ARGB32);
+            rt.antiAliasing = 2;
+            cam.targetTexture = rt;
+            cam.Render();
+
+            RenderTexture prev = RenderTexture.active;
+            RenderTexture.active = rt;
+            Texture2D tex = new Texture2D(W, H, TextureFormat.RGB24, false);
+            tex.ReadPixels(new Rect(0f, 0f, W, H), 0, 0);
+            tex.Apply();
+            RenderTexture.active = prev;
+            cam.targetTexture = null;
+
+            string path = System.IO.Path.Combine(outDir, "pub_" + s.name + ".png");
+            System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
+            Debug.Log("[PubEnvironment] Wrote " + path);
+
+            Object.DestroyImmediate(tex);
+            rt.Release();
+            Object.DestroyImmediate(rt);
+        }
+
+        // Leave the camera back at the review position.
+        PlaceReviewCamera();
+    }
+
+    [MenuItem("Tools/Pub Environment/Clear", false, 1)]
+    public static void Clear()
+    {
+        int removed = 0;
+        foreach (string n in new[] { RootName, LegacyRootName })
+        {
+            // Guarded loop: DestroyImmediate can no-op on some objects, and an
+            // unguarded while(Find(n) != null) would hang the editor.
+            for (int guard = 0; guard < 64; guard++)
+            {
+                GameObject go = GameObject.Find(n);
+                if (go == null) break;
+                Object.DestroyImmediate(go);
+                removed++;
+            }
+        }
+        if (removed > 0)
+        {
+            EditorSceneManager.MarkSceneDirty(ActiveScene);
+            Debug.Log("[PubEnvironment] Cleared " + removed + " generated root(s).");
+        }
+    }
+
+    // ------------------------------------------------------------- materials
+
+    static void CreateMaterials()
+    {
+        if (!AssetDatabase.IsValidFolder("Assets/PubEnvironment"))
+            AssetDatabase.CreateFolder("Assets", "PubEnvironment");
+        if (!AssetDatabase.IsValidFolder(MaterialFolder))
+            AssetDatabase.CreateFolder("Assets/PubEnvironment", "Materials");
+
+        // Shell ---------------------------------------------------------------
+        Mat("Mat_Pub_ConcreteFloor", Rgb(102, 99, 94), 0.14f, 0f);
+        Mat("Mat_Pub_PlasterPink", Rgb(214, 176, 168), 0.06f, 0f);
+        Mat("Mat_Pub_PlasterWhite", Rgb(222, 216, 204), 0.06f, 0f);
+        Mat("Mat_Pub_BrickWhitewash", Rgb(198, 172, 164), 0.05f, 0f);
+        Mat("Mat_Pub_Dado", Rgb(150, 88, 106), 0.12f, 0f);
+
+        // Structure -----------------------------------------------------------
+        Mat("Mat_Pub_SteelBlue", Rgb(38, 84, 140), 0.35f, 0.25f);
+        Mat("Mat_Pub_RoofSheet", Rgb(120, 118, 112), 0.30f, 0.55f);
+        MatEmissive("Mat_Pub_Skylight", Rgb(236, 240, 235), Rgb(255, 252, 238), 1.15f);
+
+        // Furniture -----------------------------------------------------------
+        Mat("Mat_Pub_ConcreteTable", Rgb(126, 124, 118), 0.20f, 0f);
+        Mat("Mat_Pub_ChairRed", Rgb(190, 34, 44), 0.55f, 0f);
+        Mat("Mat_Pub_ChairBlue", Rgb(36, 68, 158), 0.55f, 0f);
+        Mat("Mat_Pub_ChairGreen", Rgb(58, 158, 62), 0.55f, 0f);
+
+        // Service area --------------------------------------------------------
+        Mat("Mat_Pub_GrilleTeal", Rgb(78, 168, 174), 0.42f, 0.30f);
+        Mat("Mat_Pub_CoolerRed", Rgb(176, 32, 34), 0.48f, 0.10f);
+        Mat("Mat_Pub_DarkWood", Rgb(64, 44, 32), 0.22f, 0f);
+        MatTransparent("Mat_Pub_GlassClear", new Color(0.78f, 0.85f, 0.86f, 0.28f), 0.92f);
+
+        // Clutter -------------------------------------------------------------
+        Mat("Mat_Pub_WaterCase", Rgb(178, 206, 214), 0.62f, 0f);
+        Mat("Mat_Pub_CrateGreen", Rgb(46, 132, 84), 0.50f, 0f);
+        Mat("Mat_Pub_FanBlade", Rgb(72, 56, 44), 0.28f, 0f);
+        Mat("Mat_Pub_Litter", Rgb(206, 200, 188), 0.18f, 0f);
+
+        // Lights --------------------------------------------------------------
+        MatEmissiveBright("Mat_Pub_Bulb", Rgb(255, 238, 198), Rgb(255, 226, 158), 2.2f);
+        MatEmissiveBright("Mat_Pub_Tube", Rgb(238, 246, 255), Rgb(206, 228, 255), 1.5f);
+        Mat("Mat_Pub_Enamel", Rgb(224, 222, 214), 0.45f, 0.05f);
+
+        // Signage (generic, no real branding) ----------------------------------
+        Mat("Mat_Pub_PosterGreen", Rgb(42, 92, 46), 0.20f, 0f);
+        Mat("Mat_Pub_PosterDark", Rgb(38, 40, 46), 0.20f, 0f);
+        Mat("Mat_Pub_PosterWarm", Rgb(168, 108, 42), 0.20f, 0f);
+        Mat("Mat_Pub_PosterCream", Rgb(214, 202, 176), 0.20f, 0f);
+
+        // Reuse whatever the earlier session left, if it is still there.
+        Mat("Mat_Pub_Metal", Rgb(139, 140, 146), 0.60f, 0.85f);
+        Mat("Mat_Pub_GlassAmber", Rgb(115, 60, 14), 0.88f, 0f);
+        Mat("Mat_Pub_GlassGreen", Rgb(28, 74, 40), 0.88f, 0f);
+
+        // Bottle labels. Paper, so almost no smoothness. Several colourways so
+        // a shelf or table reads as different brands rather than one product.
+        Mat("Mat_Pub_LabelCream",  Rgb(226, 214, 186), 0.06f, 0f);
+        Mat("Mat_Pub_LabelRed",    Rgb(156, 38, 34),   0.06f, 0f);
+        Mat("Mat_Pub_LabelBlue",   Rgb(30, 56, 112),   0.06f, 0f);
+        Mat("Mat_Pub_LabelGold",   Rgb(176, 140, 58),  0.20f, 0.25f);
+        Mat("Mat_Pub_LabelGreen",  Rgb(36, 92, 52),    0.06f, 0f);
+        Mat("Mat_Pub_LabelWhite",  Rgb(224, 224, 220), 0.06f, 0f);
+
+        // Neck foil and caps: metal, so they catch the bulbs.
+        Mat("Mat_Pub_FoilGold",   Rgb(186, 152, 62),  0.62f, 0.75f);
+        Mat("Mat_Pub_FoilSilver", Rgb(178, 182, 186), 0.62f, 0.80f);
+        Mat("Mat_Pub_CapRed",     Rgb(142, 32, 30),   0.42f, 0.35f);
+        Mat("Mat_Pub_CapGold",    Rgb(170, 138, 56),  0.55f, 0.70f);
+        Mat("Mat_Pub_CapBlack",   Rgb(26, 26, 28),    0.45f, 0.30f);
+
+        // Bottle contents, seen through clear glass. A visible fill line does
+        // more for realism than any amount of label detail.
+        Mat("Mat_Pub_LiquidAmber", Rgb(150, 84, 22),  0.80f, 0f);
+        Mat("Mat_Pub_LiquidRed",   Rgb(132, 30, 38),  0.80f, 0f);
+        Mat("Mat_Pub_LiquidClear", Rgb(206, 212, 200), 0.85f, 0f);
+        Mat("Mat_Pub_LiquidDark",  Rgb(28, 20, 18),   0.70f, 0f);
+        Mat("Mat_Pub_LiquidBlue",  Rgb(74, 146, 176), 0.82f, 0f);
+
+        // Compound / exterior ------------------------------------------------
+        Mat("Mat_Pub_DirtGround",     Rgb(148, 132, 108), 0.08f, 0f);
+        Mat("Mat_Pub_CompoundWall",   Rgb(202, 190, 162), 0.06f, 0f);
+        Mat("Mat_Pub_GateWood",       Rgb(168, 128, 68),  0.18f, 0f);
+        Mat("Mat_Pub_SignboardGreen", Rgb(26, 78, 44),    0.15f, 0f);
+        Mat("Mat_Pub_ConcretePole",   Rgb(172, 168, 160), 0.10f, 0f);
+        Mat("Mat_Pub_StreetGrey",     Rgb(92, 88, 84),    0.10f, 0f);
+
+        AssetDatabase.SaveAssets();
+    }
+
+    static Color Rgb(int r, int g, int b)
+    {
+        return new Color(r / 255f, g / 255f, b / 255f, 1f);
+    }
+
+    static Material Mat(string name, Color color, float smoothness, float metallic)
+    {
+        string path = MaterialFolder + "/" + name + ".mat";
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (m == null)
+        {
+            m = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(m, path);
+        }
+        m.shader = Shader.Find("Standard");
+        m.SetColor("_Color", color);
+        m.SetFloat("_Glossiness", smoothness);
+        m.SetFloat("_Metallic", metallic);
+        m.enableInstancing = true;
+        EditorUtility.SetDirty(m);
+        _mats[name] = m;
+        return m;
+    }
+
+    static Material MatEmissive(string name, Color baseColor, Color emission, float intensity)
+    {
+        Material m = Mat(name, baseColor, 0.30f, 0f);
+        m.EnableKeyword("_EMISSION");
+        m.SetColor("_EmissionColor", emission * intensity);
+        m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.BakedEmissive;
+        EditorUtility.SetDirty(m);
+        return m;
+    }
+
+    /// <summary>
+    /// Emissive fixture material with extra punch. With the roof sealed and
+    /// ambient near-black, bulbs and tubes are the brightest things in view,
+    /// so their surfaces need to read as the source rather than as pale grey.
+    /// </summary>
+    static Material MatEmissiveBright(string name, Color baseColor, Color emission, float intensity)
+    {
+        return MatEmissive(name, baseColor, emission, intensity * 2.6f);
+    }
+
+    static Material MatTransparent(string name, Color color, float smoothness)
+    {
+        Material m = Mat(name, color, smoothness, 0f);
+        m.SetFloat("_Mode", 3f);
+        m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        m.SetFloat("_ZWrite", 0f);
+        m.DisableKeyword("_ALPHATEST_ON");
+        m.EnableKeyword("_ALPHABLEND_ON");
+        m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        m.renderQueue = 3000;
+        EditorUtility.SetDirty(m);
+        return m;
+    }
+
+    static Material M(string name)
+    {
+        Material m;
+        if (_mats.TryGetValue(name, out m)) return m;
+        Debug.LogWarning("[PubEnvironment] Missing material " + name);
+        return null;
+    }
+
+    // -------------------------------------------------------------- primitives
+
+    static Transform Group(Transform parent, string name)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        return go.transform;
+    }
+
+    static GameObject Prim(PrimitiveType type, string name, Transform parent,
+                           Vector3 pos, Vector3 scale, Material mat,
+                           Vector3 euler, bool keepCollider)
+    {
+        GameObject go = GameObject.CreatePrimitive(type);
+        go.name = name;
+        go.transform.SetParent(parent, false);
+        go.transform.localPosition = pos;
+        go.transform.localEulerAngles = euler;
+        go.transform.localScale = scale;
+
+        Collider col = go.GetComponent<Collider>();
+        if (col != null && !keepCollider) Object.DestroyImmediate(col);
+
+        MeshRenderer mr = go.GetComponent<MeshRenderer>();
+        if (mr != null)
+        {
+            if (mat != null) mr.sharedMaterial = mat;
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+        }
+
+        GameObjectUtility.SetStaticEditorFlags(go,
+            StaticEditorFlags.BatchingStatic | StaticEditorFlags.ContributeGI |
+            StaticEditorFlags.OccluderStatic | StaticEditorFlags.OccludeeStatic);
+
+        _objectCount++;
+        _triangleCount += TrisFor(type);
+        return go;
+    }
+
+    static int TrisFor(PrimitiveType t)
+    {
+        switch (t)
+        {
+            case PrimitiveType.Cube: return 12;
+            case PrimitiveType.Cylinder: return 80;
+            case PrimitiveType.Sphere: return 768;
+            case PrimitiveType.Quad: return 2;
+            case PrimitiveType.Plane: return 200;
+            default: return 12;
+        }
+    }
+
+    /// <summary>
+    /// Connects the scenario to the rig and the lighting after both exist.
+    /// Done here rather than in either builder because it is the one place
+    /// that can see the whole scene.
+    /// </summary>
+    static void WireScenario(GameObject root, GameObject scenario)
+    {
+        if (scenario == null)
+            return;
+
+        var origin = Object.FindFirstObjectByType<Unity.XR.CoreUtils.XROrigin>();
+        if (origin == null)
+        {
+            Debug.LogWarning("[Scenario] No XR Origin - scenario left unwired.");
+            return;
+        }
+
+        // Lighting director lives on the rig so it can be found from the
+        // scenario, and so it dies with the rig on rebuild.
+        var director = origin.gameObject.AddComponent<LightingDirector>();
+
+        foreach (Light l in root.GetComponentsInChildren<Light>(true))
+        {
+            if (l.type == LightType.Directional)
+                continue;   // the sun is exterior; the interior moods must not touch it
+            director.RoomLights.Add(l);
+        }
+
+        Transform focus = scenario.transform.Find("Lamp_TableFocus");
+        if (focus != null)
+            director.FocusLight = focus.GetComponent<Light>();
+
+        // Pay for the focus pixel light by demoting the pendant furthest from
+        // the hero table, so the pixel-light count never rises above four.
+        Light farthest = null;
+        float bestDist = -1f;
+        Vector3 heroPos = new Vector3(PubScenarioBuilder.TableX, 0f, PubScenarioBuilder.TableZ);
+        foreach (Light l in root.GetComponentsInChildren<Light>(true))
+        {
+            if (l.renderMode != LightRenderMode.ForcePixel) continue;
+            float d = Vector3.Distance(new Vector3(l.transform.position.x, 0f, l.transform.position.z), heroPos);
+            if (d > bestDist) { bestDist = d; farthest = l; }
+        }
+        director.DemotableLight = farthest;
+
+        var scen = origin.gameObject.AddComponent<SeatedTableScenario>();
+        scen.Lighting = director;
+        scen.Marker = scenario.transform.Find("Marker");
+        scen.SeatAnchor = scenario.transform.Find("SeatAnchor");
+
+        Transform volume = scenario.transform.Find("TableVolume");
+        if (volume != null)
+            scen.Containment = volume.GetComponent<TableContainment>();
+
+        Transform propRoot = scenario.transform.Find("TableProps");
+        if (propRoot != null)
+        {
+            foreach (var gi in propRoot.GetComponentsInChildren<
+                     UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>(true))
+            {
+                scen.TableProps.Add(gi);
+            }
+        }
+
+        Debug.Log($"[Scenario] Wired: {director.RoomLights.Count} room lights, " +
+                  $"{scen.TableProps.Count} gated props, demoted '{(farthest != null ? farthest.name : "none")}'.");
+    }
+
+    // --------------------------------------------------------- Blender models
+
+    const string ModelFolder = "Assets/Models";
+
+    static readonly Dictionary<string, GameObject> _modelCache =
+        new Dictionary<string, GameObject>();
+
+    /// <summary>
+    /// Loads an FBX built by BlenderAssets/scripts/build_all.py.
+    /// Returns null when the model is absent, so every call site can fall back
+    /// to its original primitive version and the scene still builds.
+    /// </summary>
+    static GameObject ModelSource(string assetName)
+    {
+        GameObject src;
+        if (_modelCache.TryGetValue(assetName, out src))
+            return src;
+
+        src = AssetDatabase.LoadAssetAtPath<GameObject>(
+            ModelFolder + "/" + assetName + ".fbx");
+
+        if (src == null)
+            Debug.LogWarning("[PubEnvironment] Model not found: " + assetName +
+                             " - falling back to primitives.");
+
+        _modelCache[assetName] = src;
+        return src;
+    }
+
+    /// <summary>
+    /// Returns a VertexGrime variant of a flat material, creating it on first
+    /// use. Models carry grime baked into vertex colours by the Blender build;
+    /// Unity's Standard shader ignores vertex colours entirely, so models need
+    /// this shader while primitives keep plain Standard.
+    ///
+    /// Kept as a separate material rather than switching the palette wholesale:
+    /// primitives have no vertex colour channel, and what a shader reads for a
+    /// missing channel is not guaranteed.
+    /// </summary>
+    static Material GrimeVariant(Material flat)
+    {
+        if (flat == null)
+            return null;
+
+        string path = MaterialFolder + "/" + flat.name + "_Grime.mat";
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(path);
+
+        Shader grimeShader = Shader.Find("PubEnvironment/VertexGrime");
+        if (grimeShader == null)
+        {
+            Debug.LogWarning("[PubEnvironment] VertexGrime shader missing - using flat material.");
+            return flat;
+        }
+
+        if (m == null)
+        {
+            m = new Material(grimeShader);
+            AssetDatabase.CreateAsset(m, path);
+        }
+
+        m.shader = grimeShader;
+        m.SetColor("_Color", flat.GetColor("_Color"));
+        m.SetFloat("_Glossiness", flat.HasProperty("_Glossiness") ? flat.GetFloat("_Glossiness") : 0.3f);
+        m.SetFloat("_Metallic", flat.HasProperty("_Metallic") ? flat.GetFloat("_Metallic") : 0f);
+        m.SetFloat("_GrimeStrength", 1f);
+        // 64 chairs, 38 bottles and glasses all share one mesh and material.
+        // Instancing draws them in a handful of calls instead of one each.
+        m.enableInstancing = true;
+        EditorUtility.SetDirty(m);
+        return m;
+    }
+
+    /// <summary>
+    /// Instantiates a Blender model under <paramref name="parent"/> and applies
+    /// one of the existing flat materials. Blender supplies shape only; Unity
+    /// keeps owning the look, so the 41-material palette stays consistent.
+    /// </summary>
+    static GameObject Model(string assetName, Transform parent, Vector3 pos,
+                            float yaw, Material mat, bool isStatic = true,
+                            Material[] slotMaterials = null)
+    {
+        GameObject src = ModelSource(assetName);
+        if (src == null)
+            return null;
+
+        // Blender FBX imports with a -90 deg X rotation on its root, which is
+        // what stands the Z-up mesh upright in Unity's Y-up world. Writing yaw
+        // straight onto that transform destroys it and lays the asset flat, so
+        // yaw goes on a holder and the model's own rotation is left untouched.
+        GameObject holder = new GameObject(assetName);
+        holder.transform.SetParent(parent, false);
+        holder.transform.localPosition = pos;
+        holder.transform.localEulerAngles = new Vector3(0f, yaw, 0f);
+
+        GameObject go = (GameObject)Object.Instantiate(src, holder.transform);
+        go.name = assetName + "_Mesh";
+        go.transform.localPosition = Vector3.zero;
+        go.transform.localRotation = src.transform.localRotation;
+        go.transform.localScale = src.transform.localScale;
+
+        Material grimeMat = GrimeVariant(mat);
+
+        foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>())
+        {
+            if (slotMaterials != null && mr.sharedMaterials.Length > 1)
+            {
+                // Multi-slot model (bottle: glass / label / foil / cap). Fill
+                // every slot the mesh actually has, falling back to the body
+                // material so a missing entry never renders as magenta.
+                Material[] assigned = new Material[mr.sharedMaterials.Length];
+                for (int i = 0; i < assigned.Length; i++)
+                {
+                    Material slotMat = (i < slotMaterials.Length && slotMaterials[i] != null)
+                        ? slotMaterials[i] : mat;
+                    assigned[i] = GrimeVariant(slotMat);
+                }
+                mr.sharedMaterials = assigned;
+            }
+            else if (grimeMat != null)
+            {
+                mr.sharedMaterial = grimeMat;
+            }
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+
+            MeshFilter mf = mr.GetComponent<MeshFilter>();
+            if (mf != null && mf.sharedMesh != null)
+                _triangleCount += mf.sharedMesh.triangles.Length / 3;
+        }
+
+        // Imported meshes arrive with no collider; grabbables get one from
+        // MakeGrabbable, static scenery does not need one here.
+        if (isStatic)
+        {
+            foreach (Transform t in holder.GetComponentsInChildren<Transform>(true))
+                GameObjectUtility.SetStaticEditorFlags(t.gameObject,
+                    StaticEditorFlags.BatchingStatic | StaticEditorFlags.ContributeGI |
+                    StaticEditorFlags.OccluderStatic | StaticEditorFlags.OccludeeStatic);
+        }
+
+        _objectCount++;
+        return holder;
+    }
+
+    static GameObject Box(string name, Transform parent, Vector3 pos, Vector3 size,
+                          Material mat, bool keepCollider = false)
+    {
+        return Prim(PrimitiveType.Cube, name, parent, pos, size, mat, Vector3.zero, keepCollider);
+    }
+
+    static GameObject BoxR(string name, Transform parent, Vector3 pos, Vector3 size,
+                           Material mat, Vector3 euler, bool keepCollider = false)
+    {
+        return Prim(PrimitiveType.Cube, name, parent, pos, size, mat, euler, keepCollider);
+    }
+
+    /// Unity's cylinder is 2 units tall and 1 unit across, so height is halved here.
+    static GameObject Tube(string name, Transform parent, Vector3 pos, float diameter,
+                           float height, Material mat, Vector3 euler)
+    {
+        return Prim(PrimitiveType.Cylinder, name, parent, pos,
+                    new Vector3(diameter, height * 0.5f, diameter), mat, euler, false);
+    }
+
+    /// A straight structural member between two points in the XY plane at depth z.
+    static GameObject Member(string name, Transform parent, Vector2 a, Vector2 b,
+                             float z, float thickness, Material mat)
+    {
+        Vector2 d = b - a;
+        float len = d.magnitude;
+        float ang = Mathf.Atan2(d.y, d.x) * Mathf.Rad2Deg;
+        Vector2 mid = (a + b) * 0.5f;
+        return BoxR(name, parent, new Vector3(mid.x, mid.y, z),
+                    new Vector3(len, thickness, thickness), mat, new Vector3(0f, 0f, ang));
+    }
+
+    static float Rand(float min, float max)
+    {
+        return min + (float)_rng.NextDouble() * (max - min);
+    }
+
+    static int RandInt(int minInclusive, int maxExclusive)
+    {
+        return _rng.Next(minInclusive, maxExclusive);
+    }
+
+    /// Height of the roof underside at a given x (shallow gable, ridge at x = 0).
+    static float RoofY(float x)
+    {
+        return RidgeHeight - Mathf.Abs(x) / HalfW * RidgeRise;
+    }
+
+    // ------------------------------------------------------------------ shell
+
+    static void BuildShell(Transform g)
+    {
+        Material floorMat = M("Mat_Pub_ConcreteFloor");
+        Material plaster = M("Mat_Pub_PlasterPink");
+        Material brick = M("Mat_Pub_BrickWhitewash");
+        Material dado = M("Mat_Pub_Dado");
+
+        float wallH = EavesHeight;
+        float t = WallThickness;
+        float outerW = HallWidth + t * 2f;
+        float outerD = HallDepth + t * 2f;
+
+        Box("Floor", g, new Vector3(0f, -0.1f, 0f),
+            new Vector3(outerW, 0.2f, outerD), floorMat, true);
+
+        // Side walls (+/-X), whitewashed brick like reference 3.
+        Box("Wall_Right", g, new Vector3(HalfW + t * 0.5f, wallH * 0.5f, 0f),
+            new Vector3(t, wallH, outerD), brick, true);
+        Box("Wall_Left", g, new Vector3(-HalfW - t * 0.5f, wallH * 0.5f, 0f),
+            new Vector3(t, wallH, outerD), brick, true);
+
+        // Back wall (+Z) - solid, no doorway.
+        float backZ = HalfD + t * 0.5f;
+        Box("Wall_Back", g,
+            new Vector3(0f, wallH * 0.5f, backZ),
+            new Vector3(outerW, wallH, t), plaster, true);
+
+        // Front wall (-Z) with the wide open entrance.
+        float entW = 4.2f, entH = 2.6f;
+        float frontZ = -HalfD - t * 0.5f;
+        float fSegW = (HalfW + t) - entW * 0.5f;
+        Box("Wall_Front_Left", g,
+            new Vector3(-entW * 0.5f - fSegW * 0.5f, wallH * 0.5f, frontZ),
+            new Vector3(fSegW, wallH, t), plaster, true);
+        Box("Wall_Front_Right", g,
+            new Vector3(entW * 0.5f + fSegW * 0.5f, wallH * 0.5f, frontZ),
+            new Vector3(fSegW, wallH, t), plaster, true);
+        Box("Wall_Front_Lintel", g,
+            new Vector3(0f, entH + (wallH - entH) * 0.5f, frontZ),
+            new Vector3(entW, wallH - entH, t), plaster, true);
+
+        // Entrance reveal, so the opening reads as thick masonry.
+        Box("Entrance_Jamb_L", g, new Vector3(-entW * 0.5f, entH * 0.5f, frontZ),
+            new Vector3(0.12f, entH, t * 1.15f), dado);
+        Box("Entrance_Jamb_R", g, new Vector3(entW * 0.5f, entH * 0.5f, frontZ),
+            new Vector3(0.12f, entH, t * 1.15f), dado);
+
+        // Open entrance doors — two leaves swung inward (~75 deg).
+        Material doorSteel = M("Mat_Pub_SteelBlue");
+        Material doorWood  = M("Mat_Pub_GateWood");
+        float doorLeafW = entW * 0.5f - 0.08f;
+        float doorLeafH = entH - 0.06f;
+
+        // Left door (hinged on left jamb, swung fully open against inner wall)
+        Transform doorL = Group(g, "EntranceDoor_L");
+        doorL.localPosition = new Vector3(-entW * 0.5f + 0.04f, 0f, frontZ);
+        doorL.localEulerAngles = new Vector3(0f, 90f, 0f);
+        Box("Frame_L", doorL,
+            new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0f),
+            new Vector3(doorLeafW, doorLeafH, 0.05f), doorSteel);
+        Box("Panel_L", doorL,
+            new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0.03f),
+            new Vector3(doorLeafW - 0.10f, doorLeafH - 0.10f, 0.03f), doorWood);
+
+        // Right door (hinged on right jamb, partially open)
+        Transform doorR = Group(g, "EntranceDoor_R");
+        doorR.localPosition = new Vector3(entW * 0.5f - 0.04f, 0f, frontZ);
+        doorR.localEulerAngles = new Vector3(0f, -35f, 0f);
+        Box("Frame_R", doorR,
+            new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0f),
+            new Vector3(doorLeafW, doorLeafH, 0.05f), doorSteel);
+        Box("Panel_R", doorR,
+            new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, -0.03f),
+            new Vector3(doorLeafW - 0.10f, doorLeafH - 0.10f, 0.03f), doorWood);
+
+        // Stepped gable infill at both ends, following the shallow pitch.
+        BuildGable(g, "Gable_Back", HalfD + t * 0.5f, plaster);
+        BuildGable(g, "Gable_Front", -HalfD - t * 0.5f, plaster);
+
+        // Painted dado band, offset just inside each wall face.
+        float o = 0.02f;
+        Box("Dado_Right", g, new Vector3(HalfW - o, DadoHeight * 0.5f, 0f),
+            new Vector3(0.03f, DadoHeight, HallDepth), dado);
+        Box("Dado_Left", g, new Vector3(-HalfW + o, DadoHeight * 0.5f, 0f),
+            new Vector3(0.03f, DadoHeight, HallDepth), dado);
+        Box("Dado_Back", g, new Vector3(0f, DadoHeight * 0.5f, HalfD - o),
+            new Vector3(HallWidth, DadoHeight, 0.03f), dado);
+        // Front dado split around the entrance opening.
+        float dadoSegW = HalfW - entW * 0.5f;
+        Box("Dado_Front_L", g, new Vector3(-entW * 0.5f - dadoSegW * 0.5f, DadoHeight * 0.5f, -HalfD + o),
+            new Vector3(dadoSegW, DadoHeight, 0.03f), dado);
+        Box("Dado_Front_R", g, new Vector3(entW * 0.5f + dadoSegW * 0.5f, DadoHeight * 0.5f, -HalfD + o),
+            new Vector3(dadoSegW, DadoHeight, 0.03f), dado);
+
+        // Wall pilasters, like the brick piers in reference 3.
+        for (int i = 0; i < 6; i++)
+        {
+            float z = -HalfD + 1.8f + i * 3.3f;
+            Box("Pier_L_" + i, g, new Vector3(-HalfW + 0.06f, wallH * 0.5f, z),
+                new Vector3(0.12f, wallH, 0.5f), brick);
+            Box("Pier_R_" + i, g, new Vector3(HalfW - 0.06f, wallH * 0.5f, z),
+                new Vector3(0.12f, wallH, 0.5f), brick);
+        }
+
+        // High ventilation windows with metal grilles.
+        Transform win = Group(g, "Windows");
+        for (int i = 0; i < 3; i++)
+        {
+            float z = -4.5f + i * 5f;
+            BuildWindow(win, "Window_R_" + i, new Vector3(HalfW - 0.05f, 2.85f, z), true);
+        }
+        BuildWindow(win, "Window_L_0", new Vector3(-HalfW + 0.05f, 2.85f, 3.5f), false);
+    }
+
+    static void BuildGable(Transform g, string name, float z, Material mat)
+    {
+        Transform gg = Group(g, name);
+        const int steps = 4;
+        for (int i = 0; i < steps; i++)
+        {
+            float x0 = -HalfW + i * (HalfW / steps);
+            float x1 = -HalfW + (i + 1) * (HalfW / steps);
+            float h = RoofY((x0 + x1) * 0.5f) - EavesHeight;
+            if (h <= 0.01f) continue;
+            float w = x1 - x0;
+            Box(name + "_L" + i, gg, new Vector3((x0 + x1) * 0.5f, EavesHeight + h * 0.5f, z),
+                new Vector3(w, h, WallThickness), mat);
+            Box(name + "_R" + i, gg, new Vector3(-(x0 + x1) * 0.5f, EavesHeight + h * 0.5f, z),
+                new Vector3(w, h, WallThickness), mat);
+        }
+    }
+
+    static void BuildWindow(Transform g, string name, Vector3 pos, bool rightWall)
+    {
+        Transform w = Group(g, name);
+        float sx = rightWall ? -0.04f : 0.04f;
+        Box(name + "_Recess", w, pos + new Vector3(sx, 0f, 0f),
+            new Vector3(0.06f, 0.7f, 1.2f), M("Mat_Pub_PosterDark"));
+        for (int i = 0; i < 5; i++)
+        {
+            Box(name + "_Bar" + i, w, pos + new Vector3(sx * 1.6f, -0.28f + i * 0.14f, 0f),
+                new Vector3(0.05f, 0.035f, 1.2f), M("Mat_Pub_Metal"));
+        }
+    }
+
+    // --------------------------------------------------------- roof structure
+
+    static void BuildRoofStructure(Transform g)
+    {
+        Material steel = M("Mat_Pub_SteelBlue");
+        Material sheet = M("Mat_Pub_RoofSheet");
+        Material sky = M("Mat_Pub_Skylight");
+
+        Transform trusses = Group(g, "Trusses");
+        Transform pillars = Group(g, "Pillars");
+        Transform purlins = Group(g, "Purlins");
+        Transform panels = Group(g, "RoofPanels");
+        Transform ribs = Group(g, "Corrugation");
+
+        float step = HallDepth / TrussCount;
+        for (int i = 0; i < TrussCount; i++)
+        {
+            float z = -HalfD + step * 0.5f + i * step;
+            BuildTruss(trusses, "Truss_" + i, z, steel);
+
+            Box("Pillar_L_" + i, pillars, new Vector3(-HalfW + 0.12f, EavesHeight * 0.5f, z),
+                new Vector3(0.22f, EavesHeight, 0.22f), steel, true);
+            Box("Pillar_R_" + i, pillars, new Vector3(HalfW - 0.12f, EavesHeight * 0.5f, z),
+                new Vector3(0.22f, EavesHeight, 0.22f), steel, true);
+        }
+
+        // Purlins running the length of the hall.
+        for (int i = 0; i <= 6; i++)
+        {
+            float x = -HalfW + i * (HallWidth / 6f);
+            // Sits on the truss top chord, under the ribs and sheeting.
+            Box("Purlin_" + i, purlins, new Vector3(x, RoofY(x) + 0.045f, 0f),
+                new Vector3(0.09f, 0.09f, HallDepth + 0.6f), steel);
+        }
+
+        // Roof sheeting, split along Z so some bays can be translucent skylights.
+        const int segs = 8;
+        float segLen = (HallDepth + 0.6f) / segs;
+        float slopeLen = Mathf.Sqrt(HalfW * HalfW + RidgeRise * RidgeRise) + 0.35f;
+        float slopeAng = Mathf.Atan2(RidgeRise, HalfW) * Mathf.Rad2Deg;
+
+        for (int side = 0; side < 2; side++)
+        {
+            float sign = side == 0 ? -1f : 1f;
+            for (int i = 0; i < segs; i++)
+            {
+                float z = -(HallDepth + 0.6f) * 0.5f + segLen * (i + 0.5f);
+                // Roof closed: the interior is lit by its bulbs, not by daylight
+                // through the roof. Flip RoofSkylights to restore the open bays.
+                bool skylight = RoofSkylights && (i == 2 || i == 5);
+                // Alternate panels sit slightly proud, so a lapped pair is
+                // never coplanar. Overlapping them at the SAME height made the
+                // overlap z-fight -- the depth buffer cannot order two faces in
+                // the same plane, so they flicker. Real sheets lap over each
+                // other anyway, so this is also what the roof should look like.
+                float lap = (i % 2 == 0) ? 0f : 0.045f;
+
+                Box("Roof_" + (side == 0 ? "L" : "R") + "_" + i, panels,
+                    new Vector3(sign * HalfW * 0.5f,
+                                EavesHeight + RidgeRise * 0.5f + 0.17f + lap, z),
+                    // 1.10, not 0.98. At 98 % each panel fell 2 % short of its
+                    // segment, leaving a ~5 cm slot between all 8 panels per
+                    // side -- the dashed lines of sunlight across the floor.
+                    // Real corrugated sheets overlap; these now do too.
+                    new Vector3(slopeLen, 0.06f, segLen * 1.06f),
+                    skylight ? sky : sheet)
+                    .transform.localEulerAngles = new Vector3(0f, 0f, sign * -slopeAng);
+            }
+        }
+
+        // Corrugation ribs on the underside, running down the slope.
+        int ribCount = Mathf.Max(1, Mathf.RoundToInt((HallDepth + 0.6f) / RoofRibSpacing));
+        for (int side = 0; side < 2; side++)
+        {
+            float sign = side == 0 ? -1f : 1f;
+            for (int i = 0; i < ribCount; i++)
+            {
+                float z = -(HallDepth + 0.6f) * 0.5f + RoofRibSpacing * (i + 0.5f);
+                BoxR("Rib_" + (side == 0 ? "L" : "R") + "_" + i, ribs,
+                     new Vector3(sign * HalfW * 0.5f, EavesHeight + RidgeRise * 0.5f + 0.11f, z),
+                     new Vector3(slopeLen, 0.045f, 0.07f), sheet,
+                     new Vector3(0f, 0f, sign * -slopeAng));
+            }
+        }
+    }
+
+    static void BuildTruss(Transform parent, string name, float z, Material steel)
+    {
+        Transform t = Group(parent, name);
+        const float th = 0.075f;
+        float bot = EavesHeight;
+
+        Member(name + "_BottomChord", t, new Vector2(-HalfW - 0.2f, bot),
+               new Vector2(HalfW + 0.2f, bot), z, 0.10f, steel);
+        Member(name + "_TopChord_L", t, new Vector2(-HalfW - 0.2f, RoofY(-HalfW - 0.2f)),
+               new Vector2(0f, RidgeHeight), z, 0.09f, steel);
+        Member(name + "_TopChord_R", t, new Vector2(0f, RidgeHeight),
+               new Vector2(HalfW + 0.2f, RoofY(HalfW + 0.2f)), z, 0.09f, steel);
+
+        // Zigzag web, the giveaway detail in the reference photos.
+        const int bays = 6;
+        float bayW = HallWidth / bays;
+        for (int i = 0; i < bays; i++)
+        {
+            float xa = -HalfW + i * bayW;
+            float xb = xa + bayW * 0.5f;
+            float xc = xa + bayW;
+            Member(name + "_Web_a" + i, t, new Vector2(xa, bot), new Vector2(xb, RoofY(xb)), z, th, steel);
+            Member(name + "_Web_b" + i, t, new Vector2(xb, RoofY(xb)), new Vector2(xc, bot), z, th, steel);
+        }
+        // No end posts: at x = +/-HalfW the top chord already meets the bottom
+        // chord, so a post there would be a zero-length (invisible) member.
+    }
+
+    // ----------------------------------------------------------- service area
+
+    static void BuildServiceArea(Transform g)
+    {
+        Material concrete = M("Mat_Pub_ConcreteTable");
+        Material teal = M("Mat_Pub_GrilleTeal");
+        Material wood = M("Mat_Pub_DarkWood");
+        Material cooler = M("Mat_Pub_CoolerRed");
+        Material glass = M("Mat_Pub_GlassClear");
+
+        float cz = HalfD - 2.4f;
+        float cx = 1.9f;
+        float cw = 6.6f;
+
+        const float CounterH = 1.05f;   // working height
+        const float TopY = CounterH + 0.045f;
+
+        // ---- Counter body ---------------------------------------------------
+        // Cast concrete, with a recessed kick at the floor and an overhanging
+        // top slab. The recess is what stops it reading as a plain block: real
+        // counters are stood at, so your feet go under the front edge.
+        Box("Counter_Kick", g, new Vector3(cx, 0.075f, cz + 0.06f),
+            new Vector3(cw - 0.10f, 0.15f, 0.72f), concrete, true);
+        Box("Counter_Base", g, new Vector3(cx, 0.60f, cz),
+            new Vector3(cw, 0.90f, 0.85f), concrete, true);
+
+        // Top slab plus a chamfer strip, so the edge catches the counter light.
+        Box("Counter_Top", g, new Vector3(cx, TopY, cz - 0.05f),
+            new Vector3(cw + 0.26f, 0.09f, 1.02f), concrete, true);
+        Box("Counter_TopLip", g, new Vector3(cx, TopY - 0.062f, cz - 0.05f),
+            new Vector3(cw + 0.20f, 0.035f, 0.96f), concrete);
+
+        // Customer-side drinking ledge: where glasses actually get put down.
+        Box("Counter_Ledge", g, new Vector3(cx, 0.98f, cz - 0.62f),
+            new Vector3(cw + 0.10f, 0.05f, 0.26f), concrete, true);
+        for (int i = 0; i < 4; i++)
+        {
+            Box("Counter_LedgeBracket_" + i, g,
+                new Vector3(cx - cw * 0.5f + 0.6f + i * (cw - 1.2f) / 3f, 0.86f, cz - 0.60f),
+                new Vector3(0.06f, 0.20f, 0.20f), teal);
+        }
+
+        // Return wing at the left end.
+        Box("Counter_Return", g, new Vector3(cx - cw * 0.5f + 0.42f, 0.60f, cz - 1.3f),
+            new Vector3(0.85f, 0.90f, 1.8f), concrete, true);
+        Box("Counter_ReturnTop", g, new Vector3(cx - cw * 0.5f + 0.42f, TopY, cz - 1.3f),
+            new Vector3(0.95f, 0.09f, 1.9f), concrete, true);
+
+        // ---- Security cage ----------------------------------------------------
+        // The defining feature of a TASMAC counter: heavy mesh from the counter
+        // top to the roof, with one small hatch. Stock is behind the cage and
+        // handed out through the gap. The old version was a waist-high rail,
+        // which read as a shop display rather than a caged service window.
+        Transform cage = Group(g, "ServiceCage");
+
+        float cageBottom = TopY + 0.045f;
+        float cageTop = EavesHeight - 0.10f;
+        float cageH = cageTop - cageBottom;
+        float cageZ = cz - 0.05f;
+        float cageW = cw + 0.26f;
+
+        // Hatch: a gap in the bars, wide enough to pass bottles through.
+        const float HatchW = 0.86f;
+        const float HatchTop = 0.62f;      // above the counter top
+        float hatchMinX = cx - HatchW * 0.5f;
+        float hatchMaxX = cx + HatchW * 0.5f;
+
+        // Frame.
+        Box("Cage_Head", cage, new Vector3(cx, cageTop, cageZ),
+            new Vector3(cageW, 0.10f, 0.10f), teal);
+        for (int i = 0; i < 4; i++)
+        {
+            Box("Cage_Post_" + i, cage,
+                new Vector3(cx - cageW * 0.5f + i * (cageW / 3f), cageBottom + cageH * 0.5f, cageZ),
+                new Vector3(0.09f, cageH, 0.09f), teal);
+        }
+
+        // Vertical bars, skipped across the hatch.
+        int bars = Mathf.RoundToInt(cageW / 0.26f);
+        for (int i = 0; i <= bars; i++)
+        {
+            float bx = cx - cageW * 0.5f + i * (cageW / bars);
+            bool overHatch = bx > hatchMinX - 0.05f && bx < hatchMaxX + 0.05f;
+
+            float barBottom = overHatch ? cageBottom + HatchTop : cageBottom;
+            float barH = cageTop - barBottom;
+            if (barH <= 0.05f) continue;
+
+            Box("Cage_Bar_" + i, cage, new Vector3(bx, barBottom + barH * 0.5f, cageZ),
+                new Vector3(0.035f, barH, 0.035f), teal);
+        }
+
+        // Horizontal rails, also broken by the hatch.
+        int rails = 7;
+        for (int i = 0; i < rails; i++)
+        {
+            float ry = cageBottom + (i + 0.5f) * (cageH / rails);
+            bool throughHatch = ry < cageBottom + HatchTop;
+
+            if (!throughHatch)
+            {
+                Box("Cage_Rail_" + i, cage, new Vector3(cx, ry, cageZ),
+                    new Vector3(cageW, 0.032f, 0.032f), teal);
+                continue;
+            }
+
+            float leftW = (hatchMinX - (cx - cageW * 0.5f));
+            float rightW = ((cx + cageW * 0.5f) - hatchMaxX);
+            Box("Cage_RailL_" + i, cage,
+                new Vector3(cx - cageW * 0.5f + leftW * 0.5f, ry, cageZ),
+                new Vector3(leftW, 0.032f, 0.032f), teal);
+            Box("Cage_RailR_" + i, cage,
+                new Vector3(hatchMaxX + rightW * 0.5f, ry, cageZ),
+                new Vector3(rightW, 0.032f, 0.032f), teal);
+        }
+
+        // Hatch surround and its pass-through shelf.
+        Box("Hatch_Lintel", cage, new Vector3(cx, cageBottom + HatchTop, cageZ),
+            new Vector3(HatchW + 0.16f, 0.07f, 0.09f), teal);
+        Box("Hatch_JambL", cage, new Vector3(hatchMinX - 0.045f, cageBottom + HatchTop * 0.5f, cageZ),
+            new Vector3(0.06f, HatchTop, 0.09f), teal);
+        Box("Hatch_JambR", cage, new Vector3(hatchMaxX + 0.045f, cageBottom + HatchTop * 0.5f, cageZ),
+            new Vector3(0.06f, HatchTop, 0.09f), teal);
+        Box("Hatch_Shelf", cage, new Vector3(cx, cageBottom + 0.02f, cageZ - 0.09f),
+            new Vector3(HatchW + 0.10f, 0.04f, 0.30f), concrete, true);
+
+        // Open bottle shelving against the back wall.
+        Transform shelf = Group(g, "BackShelving");
+        float sx = -0.6f, sz = HalfD - 0.45f, sw = 4.4f;
+        Box("Shelf_Back", shelf, new Vector3(sx, 1.15f, sz + 0.16f), new Vector3(sw, 2.3f, 0.06f), wood);
+        Box("Shelf_Side_L", shelf, new Vector3(sx - sw * 0.5f, 1.15f, sz), new Vector3(0.06f, 2.3f, 0.36f), wood);
+        Box("Shelf_Side_R", shelf, new Vector3(sx + sw * 0.5f, 1.15f, sz), new Vector3(0.06f, 2.3f, 0.36f), wood);
+        for (int i = 0; i < 5; i++)
+        {
+            Box("Shelf_Deck_" + i, shelf, new Vector3(sx, 0.35f + i * 0.48f, sz),
+                new Vector3(sw, 0.05f, 0.36f), wood);
+        }
+
+        // Bottles on the shelves.
+        Transform stock = Group(g, "BottleStock");
+        string[] bottleMats = { "Mat_Pub_GlassAmber", "Mat_Pub_GlassGreen", "Mat_Pub_GlassAmber" };
+        int n = 0;
+        for (int deck = 1; deck < 5; deck++)
+        {
+            float y = 0.35f + deck * 0.48f + 0.025f;
+            for (int i = 0; i < 5; i++)
+            {
+                float bx = sx - sw * 0.5f + 0.45f + i * 0.85f;
+                Bottle(stock, "Bottle_" + (n++), new Vector3(bx, y, sz),
+                       M(bottleMats[RandInt(0, bottleMats.Length)]), 1f);
+            }
+        }
+
+        // Beverage coolers, generic red - no branding reproduced.
+        Transform cool = Group(g, "Coolers");
+        for (int i = 0; i < 2; i++)
+        {
+            float bx = 4.3f + i * 1.15f;
+            float bz = HalfD - 0.62f;
+            Box("Cooler_" + i + "_Body", cool, new Vector3(bx, 0.72f, bz), new Vector3(1.05f, 1.45f, 0.65f), cooler, true);
+            Box("Cooler_" + i + "_Header", cool, new Vector3(bx, 1.56f, bz), new Vector3(1.05f, 0.24f, 0.65f), cooler);
+            Prim(PrimitiveType.Cube, "Cooler_" + i + "_Glass", cool,
+                 new Vector3(bx, 0.78f, bz - 0.34f), new Vector3(0.88f, 1.1f, 0.03f), glass, Vector3.zero, false);
+        }
+
+        // (Back doorway removed — solid wall now.)
+    }
+
+    static void Bottle(Transform parent, string name, Vector3 basePos, Material mat, float scale,
+                       bool grabbable = false)
+    {
+        Transform b = Group(parent, name);
+        b.localPosition = basePos;
+
+        // Pick a "brand": silhouette plus a label/foil/cap colourway. Bottles
+        // on tables are what a patient actually reaches for, so variety here
+        // matters more than anywhere else in the scene.
+        BottleBrand brand = PickBrand(grabbable);
+
+        GameObject model = Model(brand.Model, b, Vector3.zero, Rand(0f, 360f),
+                                 brand.Glass ?? mat, isStatic: !grabbable,
+                                 slotMaterials: new[]
+                                 {
+                                     brand.Glass ?? mat,
+                                     brand.Label,
+                                     brand.Foil,
+                                     brand.Cap,
+                                     brand.Liquid ?? brand.Glass,
+                                 });
+
+        if (model == null)
+        {
+            Tube(name + "_Body", b, new Vector3(0f, 0.115f * scale, 0f), 0.075f * scale, 0.23f * scale, mat, Vector3.zero);
+            Tube(name + "_Neck", b, new Vector3(0f, 0.285f * scale, 0f), 0.03f * scale, 0.11f * scale, mat, Vector3.zero);
+        }
+
+        // Shelf bottles behind the counter stay static -- they are scenery, and
+        // 20 more rigidbodies would cost more than they add.
+        if (grabbable)
+            GrabbableUpright(b, 0.042f, 0.302f, 0.6f);
+    }
+
+    // --------------------------------------------------------------- brands
+
+    struct BottleBrand
+    {
+        public string Model;
+        public Material Glass;
+        public Material Label;
+        public Material Foil;
+        public Material Cap;
+        public Material Liquid;
+    }
+
+    /// <summary>
+    /// A FIXED set of bottle brands: silhouette plus colourway.
+    ///
+    /// Fixed, not randomised per-slot. Randomising each slot independently gave
+    /// nearly every bottle a unique material combination, and unique
+    /// combinations cannot be batched or instanced -- that alone cost ~7 fps.
+    /// A handful of shared brands looks just as varied and draws far cheaper.
+    ///
+    /// No real trademarks are reproduced; these read as familiar shelf products
+    /// at VR distance without copying actual label artwork.
+    /// </summary>
+    static BottleBrand[] _brands;
+    static BottleBrand[] _tableBrands;
+
+    static void BuildBrandTable()
+    {
+        _brands = new[]
+        {
+            // Beer: what tables are actually covered in.
+            new BottleBrand { Model = "Asset_BeerBottle",  Glass = M("Mat_Pub_GlassGreen"),
+                              Label = M("Mat_Pub_LabelRed"),   Foil = M("Mat_Pub_FoilGold"),
+                              Cap = M("Mat_Pub_CapRed") },
+            new BottleBrand { Model = "Asset_BeerBottle",  Glass = M("Mat_Pub_GlassGreen"),
+                              Label = M("Mat_Pub_LabelWhite"), Foil = M("Mat_Pub_FoilGold"),
+                              Cap = M("Mat_Pub_CapRed") },
+            new BottleBrand { Model = "Asset_BeerBottle",  Glass = M("Mat_Pub_GlassAmber"),
+                              Label = M("Mat_Pub_LabelCream"), Foil = M("Mat_Pub_FoilSilver"),
+                              Cap = M("Mat_Pub_CapGold") },
+
+            // Spirits: counter shelf range.
+            new BottleBrand { Model = "Asset_WhiskyQuart", Glass = M("Mat_Pub_GlassAmber"),
+                              Label = M("Mat_Pub_LabelGold"),  Foil = M("Mat_Pub_FoilGold"),
+                              Cap = M("Mat_Pub_CapGold") },
+            new BottleBrand { Model = "Asset_WhiskyQuart", Glass = M("Mat_Pub_GlassClear"),
+                              Label = M("Mat_Pub_LabelBlue"),  Foil = M("Mat_Pub_FoilSilver"),
+                              Cap = M("Mat_Pub_CapGold") },
+            new BottleBrand { Model = "Asset_BrandyHalf",  Glass = M("Mat_Pub_GlassAmber"),
+                              Label = M("Mat_Pub_LabelGreen"), Foil = M("Mat_Pub_FoilGold"),
+                              Cap = M("Mat_Pub_CapRed") },
+
+            // Premium silhouettes for the shelf: fluted, square and tall, with
+            // visible contents through clear glass.
+            new BottleBrand { Model = "Asset_BottleFluted", Glass = M("Mat_Pub_GlassClear"),
+                              Label = M("Mat_Pub_LabelCream"), Foil = M("Mat_Pub_FoilGold"),
+                              Cap = M("Mat_Pub_CapGold"), Liquid = M("Mat_Pub_LiquidBlue") },
+            new BottleBrand { Model = "Asset_BottleSquare", Glass = M("Mat_Pub_GlassClear"),
+                              Label = M("Mat_Pub_LabelGold"), Foil = M("Mat_Pub_FoilSilver"),
+                              Cap = M("Mat_Pub_CapBlack"), Liquid = M("Mat_Pub_LiquidDark") },
+            new BottleBrand { Model = "Asset_BottleTall",   Glass = M("Mat_Pub_GlassClear"),
+                              Label = M("Mat_Pub_LabelWhite"), Foil = M("Mat_Pub_FoilGold"),
+                              Cap = M("Mat_Pub_CapGold"), Liquid = M("Mat_Pub_LiquidRed") },
+            new BottleBrand { Model = "Asset_BottleTall",   Glass = M("Mat_Pub_GlassClear"),
+                              Label = M("Mat_Pub_LabelBlue"), Foil = M("Mat_Pub_FoilSilver"),
+                              Cap = M("Mat_Pub_CapGold"), Liquid = M("Mat_Pub_LiquidAmber") },
+        };
+
+        // Indices 0-2 are the beer brands.
+        _tableBrands = new[] { _brands[0], _brands[1], _brands[2] };
+    }
+
+    static BottleBrand PickBrand(bool onTable)
+    {
+        if (_brands == null)
+            BuildBrandTable();
+
+        // Tables are mostly beer, as in the reference photographs.
+        if (onTable && Rand(0f, 1f) < 0.70f)
+            return _tableBrands[RandInt(0, _tableBrands.Length)];
+
+        return _brands[RandInt(0, _brands.Length)];
+    }
+
+    // ------------------------------------------------------------ grabbables
+
+    /// <summary>
+    /// Makes a procedurally-built group pickable in VR: one approximating
+    /// collider on the root, a Rigidbody, and an XRGrabInteractable.
+    ///
+    /// Static flags must be cleared -- Unity batches static geometry into the
+    /// combined mesh, and a batched object cannot move at runtime.
+    ///
+    /// A single root collider (rather than per-part colliders) is deliberate:
+    /// it is far cheaper for physics and accurate enough for bottles, glasses
+    /// and chairs.
+    /// </summary>
+    static void MakeGrabbable(Transform group, Collider shape, float mass)
+    {
+        GameObject go = group.gameObject;
+
+        // Clear static flags on the whole hierarchy or it will not move.
+        foreach (Transform t in go.GetComponentsInChildren<Transform>(true))
+            GameObjectUtility.SetStaticEditorFlags(t.gameObject, 0);
+
+        Rigidbody rb = go.AddComponent<Rigidbody>();
+        rb.mass = mass;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
+        // ContinuousDynamic on 100+ bodies is expensive and, for objects this
+        // size at hand speeds, unnecessary. ContinuousSpeculative is stable and
+        // much cheaper, and it also settles resting contacts more quietly.
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        rb.maxDepenetrationVelocity = 1.5f;   // stops overlaps flinging objects
+
+        var grab = go.AddComponent<
+            UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
+
+        // Kinematic, not VelocityTracking. VelocityTracking drives the body by
+        // applying velocity each physics step, so a held object fights the
+        // solver against the floor, the table, the player capsule and the
+        // other 100 rigidbodies -- which reads as constant twitching.
+        // Kinematic pins it to the hand while held; throwOnDetach restores
+        // dynamics and carries release velocity, so throwing still works.
+        grab.movementType = UnityEngine.XR.Interaction.Toolkit.Interactables
+                            .XRBaseInteractable.MovementType.Kinematic;
+        grab.useDynamicAttach = true;   // grab where you actually touched it
+        grab.throwOnDetach = true;      // release velocity carries into the throw
+
+        // Smoothing on top of a kinematic follow adds lag without adding
+        // stability, so it stays off.
+        grab.smoothPosition = false;
+        grab.smoothRotation = false;
+
+        _grabbableCount++;
+    }
+
+    /// <summary>Adds a capsule collider sized for an upright bottle/glass.</summary>
+    /// <summary>
+    /// Collider and physics for anything meant to STAND on a surface: bottles,
+    /// glasses, tumblers.
+    ///
+    /// WHY THIS IS A BOX AND NOT A CAPSULE
+    /// -----------------------------------
+    /// It used to be a CapsuleCollider, and a capsule has HEMISPHERICAL ENDS.
+    /// Every bottle and glass was therefore balanced on a curved base and could
+    /// not rest -- put one down and it tipped and rolled off, every time. The
+    /// tumbler and glass were worse still: their height (0.090, 0.100) was
+    /// barely above 2 x radius (0.076, 0.080), which Unity renders as very
+    /// nearly a sphere. They were, in effect, marbles.
+    ///
+    /// A box gives a flat base to rest on and flat sides to stack against. The
+    /// lost realism is that a knocked-over bottle no longer rolls, which is a
+    /// far smaller problem than not being able to set a drink down.
+    /// </summary>
+    static void GrabbableUpright(Transform group, float radius, float height, float mass)
+    {
+        BoxCollider bc = group.gameObject.AddComponent<BoxCollider>();
+        float side = radius * 2f;
+        bc.size = new Vector3(side, height, side);
+        bc.center = new Vector3(0f, height * 0.5f, 0f);
+
+        MakeGrabbable(group, bc, mass);
+
+        Rigidbody rb = group.GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            // Mass sits low, the way liquid sits in the bottom of a bottle, so
+            // a nudge rocks the object back upright instead of toppling it.
+            // Unity's default puts it at the collider centre -- half way up a
+            // 30 cm bottle, which is about as tippy as it could be.
+            rb.centerOfMass = new Vector3(0f, height * 0.28f, 0f);
+
+            // A release always imparts some spin. Undamped, that spin carries a
+            // bottle off the table on its own. This bleeds it off in well under
+            // a second without making the object feel like it is in treacle.
+            rb.angularDamping = 4f;
+        }
+    }
+
+    /// <summary>Adds a box collider roughly enclosing a chair.</summary>
+    static void GrabbableChair(Transform group)
+    {
+        // A single box for the whole chair reached 0.90 m high while chairs
+        // tuck 0.78-0.94 m from a table centre, so the box overlapped the
+        // table and stood proud of its 0.775 m top. Bottles then rested on an
+        // invisible slab above the table. Three boxes follow the real shape:
+        // the back is thin, so nothing solid sits over the table surface.
+        GameObject go = group.gameObject;
+
+        BoxCollider legs = go.AddComponent<BoxCollider>();
+        legs.center = new Vector3(0f, 0.215f, 0f);
+        legs.size = new Vector3(0.42f, 0.430f, 0.41f);
+
+        // Seat is deliberately thicker than the visible slab: a 55 mm target is
+        // very hard to hit with a tracked hand.
+        BoxCollider seat = go.AddComponent<BoxCollider>();
+        seat.center = new Vector3(0f, 0.445f, 0f);
+        seat.size = new Vector3(0.45f, 0.110f, 0.44f);
+
+        // Back sits at -Z, matching the corrected model. Given some depth so it
+        // can be grabbed from either side, but still thin enough that it never
+        // intrudes over a table top.
+        BoxCollider back = go.AddComponent<BoxCollider>();
+        back.center = new Vector3(0f, 0.690f, -0.240f);
+        back.size = new Vector3(0.44f, 0.460f, 0.200f);
+
+        MakeGrabbable(group, seat, 4.5f);
+    }
+
+    static int _grabbableCount;
+
+    // ---------------------------------------------------------------- seating
+
+    static void BuildSeating(Transform g)
+    {
+        Material tableMat = M("Mat_Pub_ConcreteTable");
+        Material[] chairMats =
+        {
+            M("Mat_Pub_ChairRed"), M("Mat_Pub_ChairBlue"), M("Mat_Pub_ChairGreen"),
+            M("Mat_Pub_ChairRed"), M("Mat_Pub_ChairBlue")
+        };
+
+        // Kept clear of the walls so chairs don't intersect the water-case stacks.
+        float usableW = HallWidth - 3.8f;
+        float usableD = HallDepth - 7.5f;
+        float stepX = usableW / TableCols;
+        float stepZ = usableD / TableRows;
+
+        int index = 0;
+        for (int r = 0; r < TableRows; r++)
+        {
+            for (int c = 0; c < TableCols; c++)
+            {
+                float x = -usableW * 0.5f + stepX * (c + 0.5f) + Rand(-0.18f, 0.18f);
+                float z = -HalfD + 2.2f + stepZ * (r + 0.5f) + Rand(-0.22f, 0.22f);
+
+                Transform unit = Group(g, "TableUnit_" + index.ToString("00"));
+                unit.localPosition = new Vector3(x, 0f, z);
+                unit.localEulerAngles = new Vector3(0f, Rand(-8f, 8f), 0f);
+
+                ConcreteTable(unit, tableMat);
+                _tableTops.Add(new Vector3(x, 0.775f, z));  // top surface (matches Asset_ConcreteTable)
+
+                for (int s = 0; s < ChairsPerTable; s++)
+                {
+                    float ang = 90f * s + Rand(-16f, 16f);
+                    // Clearance maths, not taste: the table collider is
+                    // 1.17 x 0.82 (half-width 0.585) and a chair's leg box is
+                    // 0.42 x 0.41 (half-depth 0.21). A side chair at 0.78 m
+                    // reached x = 0.57 and overlapped the table, so physics
+                    // depenetrated it on load and flung the chairs around the
+                    // room. 0.95 m clears with room to spare.
+                    float dist = Rand(0.95f, 1.05f);
+                    float rad = ang * Mathf.Deg2Rad;
+                    Vector3 p = new Vector3(Mathf.Sin(rad) * dist, 0f, -Mathf.Cos(rad) * dist);
+                    // Yaw must be -ang, not ang+180.
+                    //
+                    // A chair faces +Z at yaw 0 (its back is at -Z). It sits at
+                    // (sin a, 0, -cos a)*d, so the direction to the table is
+                    // (-sin a, 0, cos a). Solving (sin y, 0, cos y) for that
+                    // gives y = -a. The old ang+180 only coincides with -a at
+                    // a = 90 deg, which is why exactly one chair per table
+                    // looked right and the rest faced away.
+                    // Skip chairs that would sit on top of the scenario table.
+                    // Grid chairs sit ~1.0 m out, and TableUnit_09 is only
+                    // 1.53 m from the hero table, so its chairs reached into
+                    // the hero tabletop.
+                    Vector3 worldChair = unit.TransformPoint(p);
+                    Vector2 flatChair = new Vector2(worldChair.x, worldChair.z);
+                    Vector2 heroFlat = new Vector2(PubScenarioBuilder.TableX,
+                                                   PubScenarioBuilder.TableZ);
+                    if (Vector2.Distance(flatChair, heroFlat) < 1.45f)
+                        continue;
+
+                    Chair(unit, "Chair_" + s, p, -ang + Rand(-14f, 14f),
+                          chairMats[RandInt(0, chairMats.Length)]);
+                }
+                index++;
+            }
+        }
+
+        // A stack of spare chairs in the corner, as in the references.
+        Transform stack = Group(g, "ChairStack");
+        stack.localPosition = new Vector3(HalfW - 1.0f, 0f, -HalfD + 1.3f);
+        for (int i = 0; i < 4; i++)
+        {
+            Chair(stack, "Stacked_" + i, new Vector3(Rand(-0.05f, 0.05f), i * 0.26f, Rand(-0.05f, 0.05f)),
+                  Rand(-10f, 10f), chairMats[RandInt(0, chairMats.Length)], grabbable: false);
+        }
+    }
+
+    static void ConcreteTable(Transform parent, Material mat)
+    {
+        GameObject model = Model("Asset_ConcreteTable", parent, Vector3.zero, 0f, mat);
+
+        if (model != null)
+        {
+            // Imported meshes carry no collider, but bottles and glasses must
+            // rest on the table rather than fall through it.
+            BoxCollider bc = model.AddComponent<BoxCollider>();
+            bc.center = new Vector3(0f, 0.3875f, 0f);
+            bc.size = new Vector3(1.17f, 0.775f, 0.82f);
+            return;
+        }
+
+        Box("Table_Top", parent, new Vector3(0f, 0.755f, 0f), new Vector3(1.15f, 0.09f, 0.80f), mat, true);
+        Box("Table_Leg_L", parent, new Vector3(-0.40f, 0.355f, 0f), new Vector3(0.14f, 0.71f, 0.64f), mat, true);
+        Box("Table_Leg_R", parent, new Vector3(0.40f, 0.355f, 0f), new Vector3(0.14f, 0.71f, 0.64f), mat, true);
+    }
+
+    static void Chair(Transform parent, string name, Vector3 pos, float yaw, Material mat,
+                      bool grabbable = true)
+    {
+        Transform c = Group(parent, name);
+        c.localPosition = pos;
+        c.localEulerAngles = new Vector3(0f, yaw, 0f);
+
+        GameObject model = Model("Asset_PlasticChair", c, Vector3.zero, 0f, mat,
+                                 isStatic: false);
+
+        if (model == null)
+        {
+            Box(name + "_Seat", c, new Vector3(0f, 0.445f, 0f), new Vector3(0.44f, 0.05f, 0.44f), mat);
+            BoxR(name + "_Back", c, new Vector3(0f, 0.70f, -0.205f), new Vector3(0.42f, 0.46f, 0.045f), mat,
+                 new Vector3(-9f, 0f, 0f));
+            for (int i = 0; i < 4; i++)
+            {
+                float lx = (i < 2) ? -0.175f : 0.175f;
+                float lz = (i % 2 == 0) ? -0.175f : 0.175f;
+                Box(name + "_Leg" + i, c, new Vector3(lx, 0.21f, lz), new Vector3(0.038f, 0.42f, 0.038f), mat);
+            }
+        }
+
+        // Stacked spare chairs are scenery: four chairs 0.26 m apart with
+        // 0.9 m colliders intersect by design, and as rigidbodies they explode
+        // apart the moment physics starts.
+        if (grabbable)
+            GrabbableChair(c);
+    }
+
+    // --------------------------------------------------------------- fixtures
+
+    static void BuildFixtures(Transform g)
+    {
+        Material steel = M("Mat_Pub_SteelBlue");
+        Material blade = M("Mat_Pub_FanBlade");
+        Material enamel = M("Mat_Pub_Enamel");
+        Material bulb = M("Mat_Pub_Bulb");
+        Material tube = M("Mat_Pub_Tube");
+        Material metal = M("Mat_Pub_Metal");
+
+        // Ceiling fans hung off the trusses.
+        Transform fans = Group(g, "Fans");
+        for (int i = 0; i < 6; i++)
+        {
+            float x = (i % 2 == 0) ? -3.0f : 3.0f;
+            float z = -HalfD + 3.2f + (i / 2) * 6.2f;
+            Fan(fans, "Fan_" + i, new Vector3(x, EavesHeight, z), steel, blade, Rand(0f, 90f));
+        }
+
+        // Enamel cone pendants down the centre.
+        Transform pend = Group(g, "Pendants");
+        for (int i = 0; i < 5; i++)
+        {
+            float z = -HalfD + 2.6f + i * 4.3f;
+            Transform p = Group(pend, "Pendant_" + i);
+            p.localPosition = new Vector3(0f, 0f, z);
+            Tube("Rod", p, new Vector3(0f, EavesHeight - 0.42f, 0f), 0.035f, 0.85f, metal, Vector3.zero);
+            Tube("Shade", p, new Vector3(0f, EavesHeight - 0.95f, 0f), 0.40f, 0.20f, enamel, Vector3.zero);
+            Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.06f, 0f), 0.13f, 0.10f, bulb, Vector3.zero);
+        }
+
+        // Bare bulbs on wire, off to the sides.
+        Transform bare = Group(g, "BareBulbs");
+        for (int i = 0; i < 4; i++)
+        {
+            float x = (i % 2 == 0) ? -4.4f : 4.4f;
+            float z = -HalfD + 5.0f + (i / 2) * 8.5f;
+            Transform p = Group(bare, "BareBulb_" + i);
+            p.localPosition = new Vector3(x, 0f, z);
+            Tube("Wire", p, new Vector3(0f, EavesHeight - 0.55f, 0f), 0.012f, 1.10f, M("Mat_Pub_PosterDark"), Vector3.zero);
+            Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.16f, 0f), 0.115f, 0.16f, bulb, Vector3.zero);
+        }
+
+        // Tube lights on the walls.
+        Transform tubes = Group(g, "TubeLights");
+        for (int i = 0; i < 6; i++)
+        {
+            float side = (i % 2 == 0) ? -1f : 1f;
+            float z = -HalfD + 4.0f + (i / 2) * 6.4f;
+            Box("Tube_" + i, tubes, new Vector3(side * (HalfW - 0.22f), 3.35f, z),
+                new Vector3(0.09f, 0.09f, 1.25f), tube);
+        }
+
+        // Exposed conduit and pipe runs.
+        Transform cond = Group(g, "Conduit");
+        for (int i = 0; i < 2; i++)
+        {
+            float side = i == 0 ? -1f : 1f;
+            Tube("Conduit_H_" + i, cond, new Vector3(side * (HalfW - 0.08f), 3.05f, 0f),
+                 0.05f, HallDepth - 1f, metal, new Vector3(90f, 0f, 0f));
+            for (int d = 0; d < 3; d++)
+            {
+                Tube("Conduit_V_" + i + "_" + d, cond,
+                     new Vector3(side * (HalfW - 0.08f), 2.2f, -6f + d * 6f),
+                     0.045f, 1.7f, metal, Vector3.zero);
+            }
+        }
+    }
+
+    static void Fan(Transform parent, string name, Vector3 mount, Material rod, Material blade, float yaw)
+    {
+        Transform f = Group(parent, name);
+        f.localPosition = mount;
+        f.localEulerAngles = new Vector3(0f, yaw, 0f);
+
+        // Down-rod and motor housing.
+        Tube(name + "_Rod", f, new Vector3(0f, -0.30f, 0f), 0.045f, 0.60f, rod, Vector3.zero);
+        Tube(name + "_Hub", f, new Vector3(0f, -0.645f, 0f), 0.22f, 0.13f, rod, Vector3.zero);
+        Tube(name + "_HubCap", f, new Vector3(0f, -0.715f, 0f), 0.13f, 0.04f, rod, Vector3.zero);
+
+        // Three blades, as on every Indian ceiling fan.
+        //
+        // ROTATION: a blade's long axis is local X. Rotating (1,0,0) by theta
+        // about Y gives (cos t, 0, -sin t); the radial direction at angle a is
+        // (sin a, 0, cos a). Matching both components requires theta = a - 90,
+        // NOT 90 - a. The old value aligned only the X component, so blades
+        // splayed off-radius -- which is what made the fan look broken.
+        //
+        // PITCH goes on X, not Z. Unity applies euler as Z, X, then Y, so an X
+        // rotation tilts the blade about its own long axis (true pitch), while
+        // a Z rotation would cone the blade up or down instead.
+        //
+        // SIZE: a 1200 mm sweep fan means ~0.59 m radius. The previous blades
+        // were 1.15 m long at 0.62 m out -- a 2.4 m sweep, roughly double.
+        const float BladeLength = 0.50f;
+        const float BladeRadius = 0.335f;   // centre of the blade from the hub
+        const float BladePitch = 12f;
+
+        for (int i = 0; i < 3; i++)
+        {
+            float a = i * 120f;
+            float rad = a * Mathf.Deg2Rad;
+
+            BoxR(name + "_Blade" + i, f,
+                 new Vector3(Mathf.Sin(rad) * BladeRadius, -0.675f, Mathf.Cos(rad) * BladeRadius),
+                 new Vector3(BladeLength, 0.020f, 0.185f), blade,
+                 new Vector3(BladePitch, a - 90f, 0f));
+
+            // Short arm from the hub out to the blade root, so blades are not
+            // floating unattached in mid-air.
+            BoxR(name + "_Arm" + i, f,
+                 new Vector3(Mathf.Sin(rad) * 0.115f, -0.665f, Mathf.Cos(rad) * 0.115f),
+                 new Vector3(0.13f, 0.022f, 0.055f), rod,
+                 new Vector3(0f, a - 90f, 0f));
+        }
+    }
+
+    // ---------------------------------------------------------------- signage
+
+    static void BuildSignage(Transform g)
+    {
+        Material green = M("Mat_Pub_PosterGreen");
+        Material dark = M("Mat_Pub_PosterDark");
+        Material warm = M("Mat_Pub_PosterWarm");
+        Material cream = M("Mat_Pub_PosterCream");
+
+        // Long banners high on the side walls.
+        Transform ban = Group(g, "Banners");
+        for (int i = 0; i < 4; i++)
+        {
+            float side = (i % 2 == 0) ? -1f : 1f;
+            float z = -HalfD + 3.6f + (i / 2) * 7.5f;
+            Material m = (i % 2 == 0) ? green : dark;
+            Box("Banner_" + i, ban, new Vector3(side * (HalfW - 0.05f), 3.30f, z),
+                new Vector3(0.04f, 0.72f, 3.0f), m);
+            Box("Banner_" + i + "_Edge", ban, new Vector3(side * (HalfW - 0.08f), 2.93f, z),
+                new Vector3(0.03f, 0.05f, 3.0f), warm);
+        }
+
+        // Framed posters at eye level.
+        Transform fr = Group(g, "FramedPosters");
+        for (int i = 0; i < 5; i++)
+        {
+            float side = (i % 2 == 0) ? -1f : 1f;
+            float z = -HalfD + 5.5f + i * 2.7f;
+            Box("Poster_" + i + "_Frame", fr, new Vector3(side * (HalfW - 0.05f), 2.05f, z),
+                new Vector3(0.05f, 0.86f, 0.62f), dark);
+            Box("Poster_" + i + "_Sheet", fr, new Vector3(side * (HalfW - 0.09f), 2.05f, z),
+                new Vector3(0.03f, 0.76f, 0.52f), (i % 2 == 0) ? warm : cream);
+        }
+
+        // Menu board near the counter.
+        Box("MenuBoard", g, new Vector3(-2.4f, 2.35f, HalfD - 0.06f),
+            new Vector3(1.6f, 1.05f, 0.05f), green);
+        Box("MenuBoard_Panel", g, new Vector3(-2.4f, 2.35f, HalfD - 0.10f),
+            new Vector3(1.42f, 0.88f, 0.03f), cream);
+
+        // Small framed pictures high in the corners, as in the references.
+        Transform pic = Group(g, "SmallPictures");
+        Box("Pic_0_Frame", pic, new Vector3(-HalfW + 0.05f, 3.15f, HalfD - 1.2f),
+            new Vector3(0.05f, 0.42f, 0.32f), warm);
+        Box("Pic_0_Sheet", pic, new Vector3(-HalfW + 0.09f, 3.15f, HalfD - 1.2f),
+            new Vector3(0.03f, 0.34f, 0.25f), cream);
+        Box("Pic_1_Frame", pic, new Vector3(HalfW - 0.05f, 3.20f, HalfD - 3.0f),
+            new Vector3(0.05f, 0.40f, 0.30f), warm);
+        Box("Pic_1_Sheet", pic, new Vector3(HalfW - 0.09f, 3.20f, HalfD - 3.0f),
+            new Vector3(0.03f, 0.32f, 0.23f), cream);
+    }
+
+    // ---------------------------------------------------------------- clutter
+
+    static void BuildClutter(Transform g)
+    {
+        Material caseMat = M("Mat_Pub_WaterCase");
+        Material crate = M("Mat_Pub_CrateGreen");
+        Material litter = M("Mat_Pub_Litter");
+        Material amber = M("Mat_Pub_GlassAmber");
+        Material green = M("Mat_Pub_GlassGreen");
+
+        // Stacked cases of packaged drinking water - the signature TASMAC clutter.
+        Transform cases = Group(g, "WaterCases");
+        for (int col = 0; col < 9; col++)
+        {
+            int high = RandInt(2, 4);
+            for (int lvl = 0; lvl < high; lvl++)
+            {
+                Box("Case_L_" + col + "_" + lvl, cases,
+                    new Vector3(-HalfW + 0.42f, 0.19f + lvl * 0.38f, HalfD - 2.2f - col * 0.72f),
+                    new Vector3(0.66f, 0.36f, 0.66f), caseMat);
+            }
+        }
+        for (int col = 0; col < 4; col++)
+        {
+            for (int lvl = 0; lvl < 2; lvl++)
+            {
+                Box("Case_R_" + col + "_" + lvl, cases,
+                    new Vector3(HalfW - 0.45f, 0.19f + lvl * 0.38f, HalfD - 2.6f - col * 0.72f),
+                    new Vector3(0.66f, 0.36f, 0.66f), caseMat);
+            }
+        }
+
+        // Green crates by the counter.
+        Transform crates = Group(g, "Crates");
+        for (int i = 0; i < 4; i++)
+        {
+            Vector3 p = new Vector3(-1.4f + (i % 2) * 0.66f, 0.155f + (i / 2) * 0.31f, HalfD - 3.5f);
+            Crate(crates, "Crate_" + i, p, crate, Rand(-6f, 6f));
+        }
+
+        // Bottles and glasses, placed ON real tables rather than scattered at
+        // table height (which would leave them floating in the walkways).
+        Transform loose = Group(g, "TableClutter");
+        int b = 0, gl = 0;
+        for (int i = 0; i < _tableTops.Count; i++)
+        {
+            Vector3 top = _tableTops[i];
+            if (_rng.NextDouble() < 0.35) continue;      // leave some tables clear
+
+            int bottles = RandInt(1, 4);
+            for (int j = 0; j < bottles; j++)
+            {
+                Vector3 p = top + new Vector3(Rand(-0.42f, 0.42f), 0f, Rand(-0.26f, 0.26f));
+                Bottle(loose, "TBottle_" + (b++), p, (j % 2 == 0) ? amber : green, 0.95f, true);
+            }
+            int glasses = RandInt(1, 4);
+            for (int j = 0; j < glasses; j++)
+            {
+                Vector3 p = top + new Vector3(Rand(-0.45f, 0.45f), 0.045f, Rand(-0.28f, 0.28f));
+                Transform gGroup = Group(loose, "Glass_" + (gl++));
+                gGroup.localPosition = p;
+
+                // Alternate glass tumblers and steel tumblers, as in the photos.
+                string gModel = (gl % 2 == 0) ? "Asset_Glass" : "Asset_SteelTumbler";
+                Material gMat = (gl % 2 == 0) ? litter : M("Mat_Pub_Metal");
+
+                if (Model(gModel, gGroup, Vector3.zero, Rand(0f, 360f), gMat,
+                          isStatic: false) == null)
+                {
+                    Tube("Glass_Body", gGroup, Vector3.zero, 0.065f, 0.10f, litter, Vector3.zero);
+                }
+
+                GrabbableUpright(gGroup, 0.040f, 0.10f, 0.25f);
+            }
+        }
+
+        Transform floorJunk = Group(g, "FloorLitter");
+        for (int i = 0; i < 10; i++)
+        {
+            float x = Rand(-HalfW + 1.2f, HalfW - 1.2f);
+            float z = Rand(-HalfD + 1.5f, HalfD - 4.5f);
+            BoxR("Litter_" + i, floorJunk, new Vector3(x, 0.006f, z),
+                 new Vector3(Rand(0.08f, 0.22f), 0.012f, Rand(0.08f, 0.20f)), litter,
+                 new Vector3(0f, Rand(0f, 180f), 0f));
+        }
+
+        // A couple of loose bottles on the floor.
+        for (int i = 0; i < 3; i++)
+        {
+            Bottle(floorJunk, "FloorBottle_" + i,
+                   new Vector3(Rand(-4f, 4f), 0.04f, Rand(-6f, 6f)), green, 0.95f, true);
+        }
+    }
+
+    static void Crate(Transform parent, string name, Vector3 pos, Material mat, float yaw)
+    {
+        Transform c = Group(parent, name);
+        c.localPosition = pos;
+        c.localEulerAngles = new Vector3(0f, yaw, 0f);
+        Box(name + "_Floor", c, new Vector3(0f, -0.14f, 0f), new Vector3(0.60f, 0.03f, 0.42f), mat);
+        Box(name + "_S0", c, new Vector3(0f, 0f, 0.20f), new Vector3(0.60f, 0.30f, 0.025f), mat);
+        Box(name + "_S1", c, new Vector3(0f, 0f, -0.20f), new Vector3(0.60f, 0.30f, 0.025f), mat);
+        Box(name + "_S2", c, new Vector3(0.29f, 0f, 0f), new Vector3(0.025f, 0.30f, 0.42f), mat);
+        Box(name + "_S3", c, new Vector3(-0.29f, 0f, 0f), new Vector3(0.025f, 0.30f, 0.42f), mat);
+    }
+
+    // ---------------------------------------------------------------- lighting
+
+    static void BuildLighting(Transform g)
+    {
+        // Afternoon sun almost directly overhead.
+        //
+        // 84 deg elevation, not the old 26 deg. A low sun drove a shaft of
+        // daylight straight through the open entrance and down the hall, which
+        // competed with the bulbs the interior is supposed to be lit by. From
+        // overhead the sealed roof blocks it entirely, so the inside stays
+        // bulb-lit while the compound outside is still daylit.
+        //
+        // 84 rather than a flat 90: a few degrees of tilt keeps exterior walls
+        // and the signboard from rendering perfectly flat.
+        GameObject sunGo = new GameObject("Sun_Directional");
+        sunGo.transform.SetParent(g, false);
+        sunGo.transform.localPosition = new Vector3(0f, 9f, 0f);
+        sunGo.transform.localEulerAngles = new Vector3(84f, 15f, 0f);
+        Light sun = sunGo.AddComponent<Light>();
+        sun.type = LightType.Directional;
+        // Overcast values. Cloud scatters direct sun into diffuse light, so
+        // intensity drops, the colour loses its warm cast, and shadows go weak
+        // and soft rather than sharp-edged.
+        sun.color = new Color(0.93f, 0.94f, 0.96f);
+        sun.intensity = 0.78f;
+        sun.shadows = LightShadows.Soft;
+        // Lighter. Overcast light is scattered from the whole sky, so a shadow
+        // is a gentle darkening rather than a silhouette. This was 0.42, which
+        // read as a hard cut-out once the quality level stopped forcing hard
+        // shadows and the edges actually softened.
+        sun.shadowStrength = 0.24f;
+        // A low-resolution map needs more bias to avoid self-shadow acne, and
+        // normal bias rather than depth bias keeps contact points from
+        // detaching ("peter-panning") when it is raised.
+        sun.shadowBias = 0.05f;
+        sun.shadowNormalBias = 0.5f;
+        sun.shadowNearPlane = 0.3f;
+        _objectCount++;
+
+        // ---- Interior: bulbs only ------------------------------------------
+        //
+        // The roof is sealed, so these are the only light sources.
+        //
+        // COST MODEL: in Built-in forward rendering every PIXEL light adds a
+        // render pass for each affected renderer. At 650 renderers, six pixel
+        // lights took the headset from 72 fps to ~36. VERTEX lights are
+        // evaluated once per vertex and cost almost nothing.
+        //
+        // So: a small number of pixel lights where a visible pool matters
+        // (pendants over the tables, the counter), and vertex lights for
+        // everything else, which still colours and lifts the room.
+
+        Color warmBulb = new Color(1f, 0.845f, 0.615f);
+        Color tubeWhite = new Color(0.90f, 0.945f, 1f);
+
+        // Pixel: three pendants down the centre, spaced to cover the hall.
+        // Downlights, so they cast shadows -- see Downlight().
+        for (int i = 0; i < 3; i++)
+        {
+            float z = -HalfD + 4.0f + i * 6.2f;
+            Downlight(g, "Lamp_Pendant_C" + i, new Vector3(0f, EavesHeight - 1.15f, z),
+                      warmBulb, 2.55f, 7.2f);
+        }
+
+        // Pixel: the counter, always the brightest point in these bars.
+        Downlight(g, "Lamp_Counter", new Vector3(1.9f, 2.7f, HalfD - 2.0f),
+                  new Color(1f, 0.905f, 0.735f), 2.55f, 6.8f);
+
+        // Vertex fill: extra pendants between the pixel ones, so the light does
+        // not band into stripes along the hall.
+        for (int i = 0; i < 4; i++)
+        {
+            float z = -HalfD + 2.6f + i * 4.6f;
+            PointLight(g, "Lamp_Pendant_F" + i, new Vector3(0f, EavesHeight - 1.2f, z),
+                       warmBulb, 1.45f, 8.0f);
+        }
+
+        // Vertex fill: side rows, so the outer tables and walls are not black.
+        for (int i = 0; i < 3; i++)
+        {
+            float z = -HalfD + 4.6f + i * 5.6f;
+            PointLight(g, "Lamp_Side_L" + i, new Vector3(-3.7f, EavesHeight - 1.45f, z),
+                       warmBulb, 1.30f, 7.0f);
+            PointLight(g, "Lamp_Side_R" + i, new Vector3(3.7f, EavesHeight - 1.45f, z),
+                       warmBulb, 1.30f, 7.0f);
+        }
+
+        // Vertex: bare bulbs low over the tables.
+        for (int i = 0; i < 3; i++)
+        {
+            float z = -HalfD + 5.0f + i * 6.0f;
+            PointLight(g, "Lamp_Bare_" + i, new Vector3(0f, 2.55f, z),
+                       new Color(1f, 0.90f, 0.70f), 0.95f, 5.0f);
+        }
+
+        PointLight(g, "Lamp_Counter_Shelf", new Vector3(-1.4f, 2.35f, HalfD - 2.3f),
+                   new Color(1f, 0.88f, 0.68f), 1.35f, 6.0f);
+
+        // Vertex: cool wall tubes, a colour contrast against the warm bulbs.
+        for (int i = 0; i < 3; i++)
+        {
+            float z = -HalfD + 6.0f + i * 6.0f;
+            PointLight(g, "Lamp_Tube_L" + i, new Vector3(-HalfW + 0.55f, 2.85f, z),
+                       tubeWhite, 0.90f, 5.5f);
+            PointLight(g, "Lamp_Tube_R" + i, new Vector3(HalfW - 0.55f, 2.85f, z),
+                       tubeWhite, 0.90f, 5.5f);
+        }
+
+        // Doorway spill only: the doors are open, but this must not light the hall.
+        // Doorway spill: with the sun overhead almost nothing comes through the
+        // opening horizontally, so this is a faint wash at the threshold only.
+        PointLight(g, "Lamp_Entrance", new Vector3(0f, 1.9f, -HalfD + 0.35f),
+                   new Color(0.88f, 0.91f, 1f), 0.45f, 2.4f);
+    }
+
+    /// <summary>How dark an interior shadow gets. Low: these are soft pools.</summary>
+    const float InteriorShadowStrength = 0.34f;
+
+    /// <summary>
+    /// A ceiling lamp that CASTS SHADOWS, built as two lights.
+    ///
+    /// WHY A SPOT AND NOT A SHADOWED POINT LIGHT
+    /// -----------------------------------------
+    /// A shadow-casting point light renders its casters SIX times, once per
+    /// cubemap face. A spot renders them once. With ~650 renderers in the hall
+    /// and draw calls -- not triangles -- as this project's real constraint,
+    /// six-fold was never affordable. One is.
+    ///
+    /// A downward spot is also the more honest model: these are shaded pendant
+    /// lamps, which throw light down, not in all directions.
+    ///
+    /// WHY THERE IS STILL A POINT LIGHT
+    /// --------------------------------
+    /// A bare spot would leave the ceiling and upper walls around each lamp
+    /// black, because nothing else lights them. The companion is a VERTEX point
+    /// light: it restores the omnidirectional wash for almost nothing, since
+    /// vertex lights cost no extra forward pass. The pixel-light budget is
+    /// unchanged at four -- the spot simply takes the slot the point light used
+    /// to hold.
+    /// </summary>
+    static void Downlight(Transform parent, string name, Vector3 pos, Color color,
+                          float intensity, float range)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        go.transform.localPosition = pos;
+        go.transform.localEulerAngles = new Vector3(90f, 0f, 0f);   // straight down
+
+        Light l = go.AddComponent<Light>();
+        l.type = LightType.Spot;
+        l.color = color;
+        l.intensity = intensity;
+        l.range = range;
+        // Wide, so the pool covers a table group rather than a spotlit circle.
+        l.spotAngle = 118f;
+        l.innerSpotAngle = 55f;
+        l.renderMode = LightRenderMode.ForcePixel;
+
+        l.shadows = LightShadows.Soft;
+        l.shadowStrength = InteriorShadowStrength;
+        l.shadowBias = 0.04f;
+        l.shadowNormalBias = 0.45f;
+        l.shadowNearPlane = 0.2f;
+        _objectCount++;
+
+        // Companion wash, so the ceiling around the lamp is not black.
+        PointLight(parent, name + "_Wash", pos, color, intensity * 0.42f, range * 0.8f);
+    }
+
+    static void PointLight(Transform parent, string name, Vector3 pos, Color color,
+                           float intensity, float range,
+                           LightRenderMode mode = LightRenderMode.ForceVertex)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        go.transform.localPosition = pos;
+        Light l = go.AddComponent<Light>();
+        l.type = LightType.Point;
+        l.color = color;
+        l.intensity = intensity;
+        l.range = range;
+        l.shadows = LightShadows.None;   // keep it cheap for Quest
+        // ForceVertex lights are evaluated per-vertex: they tint the room for
+        // almost nothing. Only the few lights that must cast a visible pool are
+        // ForcePixel, because each pixel light adds a forward pass per affected
+        // renderer -- with 650 renderers that is what cost us half the framerate.
+        l.renderMode = mode;
+        _objectCount++;
+    }
+
+    const string SkyMatPath = "Assets/PubEnvironment/Materials/Mat_Sky_Overcast.mat";
+
+    /// <summary>
+    /// Overcast sky, built from Unity's procedural skybox -- no texture files,
+    /// so it costs nothing on disk and respects the no-textures rule.
+    ///
+    /// Heavy atmosphere thickness plus low exposure is what reads as cloud:
+    /// the sun disc is scattered out rather than drawn, so you get flat grey
+    /// light instead of a hard disc in a blue sky.
+    /// </summary>
+    static Material OvercastSky()
+    {
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(SkyMatPath);
+        Shader sky = Shader.Find("Skybox/Procedural");
+        if (sky == null)
+            return null;
+
+        if (m == null)
+        {
+            m = new Material(sky);
+            AssetDatabase.CreateAsset(m, SkyMatPath);
+        }
+
+        m.shader = sky;
+        m.SetFloat("_SunDisk", 0f);            // no visible disc through cloud
+        m.SetFloat("_SunSize", 0.02f);
+        m.SetFloat("_AtmosphereThickness", 2.6f);
+        m.SetColor("_SkyTint", new Color(0.52f, 0.53f, 0.55f));
+        m.SetColor("_GroundColor", new Color(0.32f, 0.30f, 0.28f));
+        m.SetFloat("_Exposure", 0.62f);
+        EditorUtility.SetDirty(m);
+        return m;
+    }
+
+    static void ConfigureRenderSettings()
+    {
+        Material sky = OvercastSky();
+        if (sky != null)
+            RenderSettings.skybox = sky;
+        // Ambient is deliberately near-black. With a sealed roof the bulbs are
+        // the light source, and any meaningful ambient term flattens the room
+        // back into the evenly-lit look we are trying to get away from.
+        // A little is kept so unlit corners are dim rather than pure black.
+        RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
+        RenderSettings.ambientSkyColor = new Color(0.070f, 0.072f, 0.082f);
+        RenderSettings.ambientEquatorColor = new Color(0.052f, 0.048f, 0.045f);
+        RenderSettings.ambientGroundColor = new Color(0.028f, 0.026f, 0.024f);
+        RenderSettings.ambientIntensity = 1f;
+
+        // Haze does most of the atmospheric work for almost no cost.
+        RenderSettings.fog = true;
+        RenderSettings.fogMode = FogMode.Linear;
+        RenderSettings.fogColor = new Color(0.115f, 0.100f, 0.086f);
+        RenderSettings.fogStartDistance = 14f;
+        RenderSettings.fogEndDistance = 60f;
+    }
+
+    static void PlaceReviewCamera()
+    {
+        GameObject cam = GameObject.Find("Main Camera");
+        if (cam == null) return;
+        // Standing just inside the entrance at eye height, looking down the hall.
+        cam.transform.position = new Vector3(0f, 1.6f, -HalfD + 1.2f);
+        cam.transform.eulerAngles = new Vector3(2f, 0f, 0f);
+        Camera c = cam.GetComponent<Camera>();
+        if (c != null)
+        {
+            c.fieldOfView = 63f;
+            c.nearClipPlane = 0.05f;
+            c.farClipPlane = 80f;
+        }
+    }
+
+    // -------------------------------------------------------------- compound
+
+    static void BuildCompound(Transform g)
+    {
+        Material dirt      = M("Mat_Pub_DirtGround");
+        Material wall      = M("Mat_Pub_CompoundWall");
+        Material gateWood  = M("Mat_Pub_GateWood");
+        Material signGreen = M("Mat_Pub_SignboardGreen");
+        Material steel     = M("Mat_Pub_SteelBlue");
+        Material pole      = M("Mat_Pub_ConcretePole");
+        Material street    = M("Mat_Pub_StreetGrey");
+        Material dark      = M("Mat_Pub_PosterDark");
+        Material cream     = M("Mat_Pub_PosterCream");
+
+        float cHW   = YardHalfW;                    // ~11.25
+        float fZ    = YardFrontZ;                    // ~-18.25
+        float bZ    = YardBackZ;                     // ~12.25
+        float cDep  = bZ - fZ;                       // ~30.5
+        float cCZ   = (fZ + bZ) * 0.5f;             // center Z
+        float t     = CompoundWallT;
+        float wH    = CompoundWallH;
+
+        // ---- Ground surfaces ----
+        Transform ground = Group(g, "Ground");
+
+        // Compound yard (dirt, slightly below building floor to avoid z-fighting)
+        Box("YardGround", ground, new Vector3(0f, -0.04f, cCZ),
+            new Vector3(cHW * 2f + t * 2f + 0.5f, 0.06f, cDep + t * 2f + 0.5f),
+            dirt, true);
+
+        // Street / road outside the compound gate
+        Box("StreetGround", ground, new Vector3(0f, -0.05f, fZ - 5f),
+            new Vector3(cHW * 2f + 10f, 0.06f, 10f), street, true);
+
+        // ---- Compound walls ----
+        Transform walls = Group(g, "CompoundWalls");
+
+        Box("CWall_Left", walls,
+            new Vector3(-cHW - t * 0.5f, wH * 0.5f, cCZ),
+            new Vector3(t, wH, cDep), wall, true);
+
+        Box("CWall_Right", walls,
+            new Vector3(cHW + t * 0.5f, wH * 0.5f, cCZ),
+            new Vector3(t, wH, cDep), wall, true);
+
+        Box("CWall_Back", walls,
+            new Vector3(0f, wH * 0.5f, bZ + t * 0.5f),
+            new Vector3(cHW * 2f + t * 2f, wH, t), wall, true);
+
+        // Front wall - left of gate
+        float segW = cHW - GateOpeningW * 0.5f;
+        Box("CWall_Front_L", walls,
+            new Vector3(-GateOpeningW * 0.5f - segW * 0.5f, wH * 0.5f, fZ - t * 0.5f),
+            new Vector3(segW, wH, t), wall, true);
+
+        // Front wall - right of gate
+        Box("CWall_Front_R", walls,
+            new Vector3(GateOpeningW * 0.5f + segW * 0.5f, wH * 0.5f, fZ - t * 0.5f),
+            new Vector3(segW, wH, t), wall, true);
+
+        // Concrete caps on top of compound walls
+        float capH = 0.08f;
+        float capW = t + 0.06f;
+        Box("Cap_Left", walls,
+            new Vector3(-cHW - t * 0.5f, wH + capH * 0.5f, cCZ),
+            new Vector3(capW, capH, cDep + 0.1f), pole);
+        Box("Cap_Right", walls,
+            new Vector3(cHW + t * 0.5f, wH + capH * 0.5f, cCZ),
+            new Vector3(capW, capH, cDep + 0.1f), pole);
+        Box("Cap_Back", walls,
+            new Vector3(0f, wH + capH * 0.5f, bZ + t * 0.5f),
+            new Vector3(cHW * 2f + t * 2f + 0.1f, capH, capW), pole);
+        Box("Cap_Front_L", walls,
+            new Vector3(-GateOpeningW * 0.5f - segW * 0.5f, wH + capH * 0.5f, fZ - t * 0.5f),
+            new Vector3(segW + 0.05f, capH, capW), pole);
+        Box("Cap_Front_R", walls,
+            new Vector3(GateOpeningW * 0.5f + segW * 0.5f, wH + capH * 0.5f, fZ - t * 0.5f),
+            new Vector3(segW + 0.05f, capH, capW), pole);
+
+        // ---- Gate posts (concrete pillars) ----
+        Transform gate = Group(g, "GateEntrance");
+        float postS = 0.32f;
+        float postH = wH + 0.4f;
+
+        Box("GatePost_L", gate,
+            new Vector3(-GateOpeningW * 0.5f, postH * 0.5f, fZ),
+            new Vector3(postS, postH, postS), pole);
+        Box("GatePost_R", gate,
+            new Vector3(GateOpeningW * 0.5f, postH * 0.5f, fZ),
+            new Vector3(postS, postH, postS), pole);
+
+        // ---- Overhead signboard (TASMAC-style) ----
+        float signPostH = 4.6f;
+        float signW = GateOpeningW + 2.2f;
+        float signH = 1.4f;
+        float signY = signPostH - signH * 0.5f - 0.15f;
+
+        // Steel support posts rising above the gate
+        Tube("SignPost_L", gate,
+            new Vector3(-GateOpeningW * 0.5f, signPostH * 0.5f, fZ),
+            0.07f, signPostH, steel, Vector3.zero);
+        Tube("SignPost_R", gate,
+            new Vector3(GateOpeningW * 0.5f, signPostH * 0.5f, fZ),
+            0.07f, signPostH, steel, Vector3.zero);
+
+        // Horizontal beams
+        Box("SignBeam_Top", gate,
+            new Vector3(0f, signPostH, fZ),
+            new Vector3(signW + 0.3f, 0.07f, 0.07f), steel);
+        Box("SignBeam_Bot", gate,
+            new Vector3(0f, signY - signH * 0.5f, fZ),
+            new Vector3(signW + 0.3f, 0.06f, 0.06f), steel);
+
+        // Signboard panel (dark green)
+        Box("Signboard", gate,
+            new Vector3(0f, signY, fZ - 0.04f),
+            new Vector3(signW, signH, 0.04f), signGreen);
+
+        // Inner text/logo area (lighter panel)
+        Box("Signboard_Inner", gate,
+            new Vector3(0f, signY, fZ - 0.07f),
+            new Vector3(signW - 0.5f, signH - 0.40f, 0.02f), cream);
+
+        // ---- Gate leaves (half-height wooden, slightly ajar) ----
+        Transform leaves = Group(g, "GateLeaves");
+        float leafW = GateOpeningW * 0.5f - 0.10f;
+        float leafH = 1.5f;
+
+        // Left leaf - hinged on left post, swung ~20 deg open
+        Transform leafL = Group(leaves, "Leaf_L");
+        leafL.localPosition = new Vector3(-GateOpeningW * 0.5f + 0.06f, 0f, fZ);
+        leafL.localEulerAngles = new Vector3(0f, -90f, 0f);
+        Box("Frame_L", leafL,
+            new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f, 0f),
+            new Vector3(leafW, leafH, 0.045f), steel);
+        Box("Fill_L", leafL,
+            new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f, -0.016f),
+            new Vector3(leafW - 0.08f, leafH - 0.10f, 0.025f), gateWood);
+
+        // Right leaf - hinged on right post, swung ~20 deg open
+        Transform leafR = Group(leaves, "Leaf_R");
+        leafR.localPosition = new Vector3(GateOpeningW * 0.5f - 0.06f, 0f, fZ);
+        leafR.localEulerAngles = new Vector3(0f, 90f, 0f);
+        Box("Frame_R", leafR,
+            new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f, 0f),
+            new Vector3(leafW, leafH, 0.045f), steel);
+        Box("Fill_R", leafR,
+            new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f, -0.015f),
+            new Vector3(leafW - 0.08f, leafH - 0.10f, 0.025f), gateWood);
+
+        // ---- Utility pole ----
+        Transform utilPole = Group(g, "UtilityPole");
+        float poleX = GateOpeningW * 0.5f + 3.5f;
+        float poleFZ = fZ - 1.5f;
+
+        Tube("Pole_Shaft", utilPole,
+            new Vector3(poleX, 3.2f, poleFZ),
+            0.14f, 6.4f, pole, Vector3.zero);
+        Box("Pole_CrossArm", utilPole,
+            new Vector3(poleX, 6.2f, poleFZ),
+            new Vector3(1.6f, 0.09f, 0.09f), steel);
+
+        // Insulators on cross arm
+        for (int i = 0; i < 3; i++)
+        {
+            Tube("Insulator_" + i, utilPole,
+                 new Vector3(poleX - 0.6f + i * 0.6f, 6.32f, poleFZ),
+                 0.05f, 0.06f, pole, Vector3.zero);
+        }
+
+        // ---- Signs on compound walls ----
+        Transform signs = Group(g, "CompoundSigns");
+
+        // Green sign on inside of left compound wall
+        Box("YardSign_L", signs,
+            new Vector3(-cHW + 0.03f, 1.85f, fZ + 3.5f),
+            new Vector3(0.04f, 0.85f, 2.0f), signGreen);
+        Box("YardSign_L_Text", signs,
+            new Vector3(-cHW + 0.06f, 1.85f, fZ + 3.5f),
+            new Vector3(0.02f, 0.65f, 1.7f), cream);
+
+        // Sign on outside of front wall (facing street)
+        Box("StreetSign", signs,
+            new Vector3(GateOpeningW * 0.5f + 2.2f, 1.8f, fZ - t - 0.03f),
+            new Vector3(1.6f, 0.9f, 0.04f), signGreen);
+
+        // ---- Entrance area light ----
+        PointLight(g, "Lamp_Gate",
+            new Vector3(0f, 3.8f, fZ + 1.0f),
+            new Color(1f, 0.94f, 0.82f), 1.4f, 12f);
+    }
+
+    // --------------------------------------------------------------- player
+
+    static void BuildPlayer(Transform g)
+    {
+        // Disable the old Main Camera so the player camera takes over.
+        GameObject oldCam = GameObject.Find("Main Camera");
+        if (oldCam != null)
+            oldCam.SetActive(false);
+
+        if (PlayerRig == RigMode.VR)
+        {
+            // Spawn on the street outside the compound gate, facing the entrance.
+            // Y = 0: in Floor tracking mode the headset supplies eye height, so
+            // the rig root sits on the ground rather than at capsule centre.
+            XRRigBuilder.Build(g, new Vector3(0f, 0f, YardFrontZ - 3.0f), 0f);
+            _objectCount += 5;
+            Debug.Log("[PubEnvironment] XR rig spawned outside the gate (OpenXR).");
+            return;
+        }
+
+        // Create the player: a capsule with CharacterController + camera.
+        GameObject player = new GameObject("Player");
+        player.transform.SetParent(g, false);
+
+        // Spawn on the street outside the compound gate, facing the entrance.
+        player.transform.localPosition = new Vector3(0f, 0.5f, YardFrontZ - 3.0f);
+        player.transform.localEulerAngles = new Vector3(0f, 0f, 0f);
+
+        // CharacterController defines the collision capsule.
+        CharacterController cc = player.AddComponent<CharacterController>();
+        cc.height = 1.75f;
+        cc.radius = 0.3f;
+        cc.center = new Vector3(0f, 0.875f, 0f);
+        cc.slopeLimit = 45f;
+        cc.stepOffset = 0.3f;
+
+        // Attach the first-person controller script.
+        player.AddComponent<FirstPersonController>();
+
+        // Camera at eye level inside the capsule.
+        GameObject camGo = new GameObject("PlayerCamera");
+        camGo.transform.SetParent(player.transform, false);
+        camGo.transform.localPosition = new Vector3(0f, 1.6f, 0f);
+        camGo.tag = "MainCamera";
+
+        Camera cam = camGo.AddComponent<Camera>();
+        cam.fieldOfView = 63f;
+        cam.nearClipPlane = 0.05f;
+        cam.farClipPlane = 80f;
+
+        // Audio listener so spatial audio works later.
+        camGo.AddComponent<AudioListener>();
+
+        _objectCount += 2;
+
+        Debug.Log("[PubEnvironment] Player spawned near entrance.");
+    }
+}
