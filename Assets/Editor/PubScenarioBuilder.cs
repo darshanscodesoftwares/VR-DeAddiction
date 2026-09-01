@@ -129,9 +129,24 @@ public static class PubScenarioBuilder
                 "Asset_BeerBottle", tableCentre + new Vector3(-0.13f, TableTop, 0.19f),
                 "Mat_Pub_GlassGreen", 0.042f, 0.302f, 0.6f, -35f);
 
-        AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_WhiskyQuart", tableCentre + new Vector3(0.28f, TableTop, 0.16f),
-                "Mat_Pub_GlassAmber", 0.040f, 0.288f, 0.6f, 62f);
+        // The branded bottle. Real detail only where the patient actually looks:
+        // seated at this table, arm's length away. The source model is 1.5
+        // MILLION triangles -- 27x the entire bar -- so it is decimated to
+        // ~12,000 by BlenderAssets/scripts/jackdaniels.py. Almost all of that
+        // density sat on smooth surfaces of revolution, which decimate without
+        // any visible change; the label, which is the whole point, keeps ten
+        // times the proportion of everything else.
+        //
+        // The distant shelf bottles stay procedural. At across-the-room
+        // distance nothing distinguishes them, and 73 of these would be
+        // 876,000 triangles.
+        //
+        // Slot order is fixed by the Blender script: glass, whiskey, label, cap.
+        AddPropSlots(props, propRoot, modelSlots, grabbableUpright,
+                     "Asset_JackDaniels", tableCentre + new Vector3(0.28f, TableTop, 0.16f),
+                     new[] { mat("Mat_JD_Glass"), mat("Mat_JD_Whiskey"),
+                             mat("Mat_JD_Label"), mat("Mat_JD_Cap") },
+                     0.052f, 0.290f, 1.0f, 62f);
 
         AddProp(props, propRoot, model, mat, grabbableUpright,
                 "Asset_WaterBottle", tableCentre + new Vector3(0.02f, TableTop, 0.02f),
@@ -142,9 +157,26 @@ public static class PubScenarioBuilder
                 "Asset_SteelTumbler", tableCentre + new Vector3(-0.16f, TableTop, -0.20f),
                 "Mat_Pub_Metal", 0.038f, 0.090f, 0.25f, 0f);
 
+        // Detailed glass, within seated reach. Unlike the bottle this source
+        // needed no decimation -- 1,490 triangles as downloaded, with the
+        // facets baked into a normal map instead of carved into geometry.
+        // Slot order is fixed by the Blender script: glass, whiskey.
+        AddPropSlots(props, propRoot, modelSlots, grabbableUpright,
+                     "Asset_WhiskeyGlass", tableCentre + new Vector3(0.12f, TableTop, -0.22f),
+                     new[] { mat("Mat_WG_Glass"), mat("Mat_WG_Whiskey") },
+                     0.042f, 0.100f, 0.30f, 0f);
+
+        // A second, plain glass -- an empty tumbler beside the poured one.
+        //
+        // Placed at (0.34, -0.14): clear of the Jack Daniel's at (0.28, 0.16)
+        // by 0.31 m and the whiskey glass at (0.12, -0.22) by 0.23 m, against a
+        // combined collider radius of ~0.10 m, and comfortably inside the
+        // containment lip's 0.515 x 0.345 half-extents. Placement here is
+        // computed against real extents rather than eyeballed -- eyeballing is
+        // what put chairs inside tables earlier in this project.
         AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_Glass", tableCentre + new Vector3(0.12f, TableTop, -0.22f),
-                "Mat_Pub_GlassClear", 0.040f, 0.100f, 0.25f, 0f);
+                "Asset_TableGlass", tableCentre + new Vector3(0.34f, TableTop, -0.14f),
+                "Mat_Pub_GlassClear", 0.049f, 0.114f, 0.25f, 0f);
 
         // Food plate removed at the user's request.
 
@@ -177,6 +209,30 @@ public static class PubScenarioBuilder
         Debug.Log($"[Scenario] Hero table at ({TableX}, {TableZ}) with {props.Count} props.");
 
         return g.gameObject;
+    }
+
+    /// <summary>
+    /// Adds a prop whose mesh has several material slots, so each part of the
+    /// model gets its own material rather than the whole thing being painted
+    /// one colour.
+    /// </summary>
+    static void AddPropSlots(List<XRGrabInteractable> into, Transform parent,
+                             System.Func<string, Transform, Vector3, float, Material, bool, Material[], GameObject> modelSlots,
+                             System.Action<Transform, float, float, float> grabbableUpright,
+                             string asset, Vector3 pos, Material[] slots,
+                             float radius, float height, float mass, float yaw)
+    {
+        // Slot 0 doubles as the fallback for any slot the mesh has but the
+        // caller did not supply, so nothing can render magenta.
+        GameObject go = modelSlots(asset, parent, pos, yaw, slots[0], false, slots);
+        if (go == null)
+            return;
+
+        grabbableUpright(go.transform, radius, height, mass);
+
+        var gi = go.GetComponent<XRGrabInteractable>();
+        if (gi != null)
+            into.Add(gi);
     }
 
     static void AddProp(List<XRGrabInteractable> into, Transform parent,

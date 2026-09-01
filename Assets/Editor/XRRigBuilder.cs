@@ -17,6 +17,7 @@
 // InputActionProperty and XRInputValueReader.m_InputAction are [SerializeField],
 // so the bindings persist into the saved scene without an .inputactions asset.
 
+using System.Collections.Generic;
 using Unity.XR.CoreUtils;
 using UnityEditor;
 using UnityEngine;
@@ -183,6 +184,14 @@ public static class XRRigBuilder
         // what made the previous point-and-pinch teleport feel unreliable.
         rig.AddComponent<HandLocomotion>();
 
+        // Footsteps, synthesised rather than shipped as audio files, and timed
+        // off the distance the character controller actually travelled -- so
+        // the cadence follows your speed and nothing plays while you stand
+        // still or sit. See FootstepAudio.cs.
+        var steps = rig.AddComponent<FootstepAudio>();
+        steps.LeftClips = LoadClips("L");
+        steps.RightClips = LoadClips("R");
+
         // A way out that does not need a controller. Leaving was only possible
         // via the Meta system button, which does not exist in a hands-only
         // session -- so a hand-tracking patient could not stop a craving
@@ -190,6 +199,32 @@ public static class XRRigBuilder
         rig.AddComponent<SafetyExit>();
 
         return rig;
+    }
+
+    /// <summary>
+    /// Loads the sliced footstep clips for one foot.
+    ///
+    /// They come from a single continuous walk recording, cut at its transients
+    /// -- so the odd-numbered footfalls are genuinely one foot and the even ones
+    /// the other, rather than the same sample pretending to alternate.
+    /// </summary>
+    static AudioClip[] LoadClips(string foot)
+    {
+        var clips = new List<AudioClip>();
+        for (int i = 1; i <= 8; i++)
+        {
+            string path = $"Assets/Audio/Footsteps/Step_{foot}{i}.wav";
+            AudioClip c = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+            if (c != null)
+                clips.Add(c);
+        }
+
+        if (clips.Count == 0)
+            Debug.LogWarning($"[XRRig] No {foot} footstep clips found; will synthesise.");
+        else
+            Debug.Log($"[XRRig] Loaded {clips.Count} {foot} footstep clips.");
+
+        return clips.ToArray();
     }
 
     static GameObject BuildHand(Transform parent, string name, string hand)

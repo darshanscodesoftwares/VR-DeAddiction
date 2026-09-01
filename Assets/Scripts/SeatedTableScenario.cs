@@ -65,6 +65,11 @@ public class SeatedTableScenario : MonoBehaviour
     [Tooltip("Seconds standing on the marker before sitting, with hands only.")]
     public float HandDwellSeconds = 1.5f;
 
+    [Tooltip("Seconds after standing during which sitting is refused. Without " +
+             "it, standing up leaves you inside the marker and the dwell timer " +
+             "drags you straight back into the chair.")]
+    public float StandCooldown = 3f;
+
     [Tooltip("Seconds both palms must be held above head height to stand.")]
     public float HandRaiseSeconds = 0.8f;
 
@@ -113,6 +118,8 @@ public class SeatedTableScenario : MonoBehaviour
     XRHandSubsystem _hands;
     float _markerDwell;
     float _raiseHold;
+    float _standLock;
+    bool _mustLeaveMarker;
 
     void Start()
     {
@@ -260,6 +267,34 @@ public class SeatedTableScenario : MonoBehaviour
                 _state = at ? State.AtMarker : State.Bar;
                 _raiseHold = 0f;
 
+                // Two locks after standing up, because one is not enough.
+                //
+                // The marker sits 1.35 m from the seat with an 0.85 m radius,
+                // so you stand up practically inside it and walking away keeps
+                // you in it for a second or more -- long enough for the dwell
+                // timer to seat you again before you have got clear.
+                //
+                // The TIMER covers the moment of standing. The EXIT
+                // REQUIREMENT covers the rest: you must leave the marker's
+                // radius once before sitting can arm again, so lingering near
+                // the chair never re-seats you however long you stay.
+                if (_standLock > 0f)
+                {
+                    _standLock -= dt;
+                    _markerDwell = 0f;
+                    break;
+                }
+
+                if (_mustLeaveMarker)
+                {
+                    if (at)
+                    {
+                        _markerDwell = 0f;
+                        break;
+                    }
+                    _mustLeaveMarker = false;
+                }
+
                 if ((pressed && at) || HandSitRequested(dt, at))
                     Sit();
                 break;
@@ -365,6 +400,9 @@ public class SeatedTableScenario : MonoBehaviour
     {
         _state = State.Bar;
         _glidingToSeat = false;
+        _standLock = StandCooldown;
+        _mustLeaveMarker = true;
+        _markerDwell = 0f;
 
         if (Lighting != null)
             Lighting.SetSeated(false);

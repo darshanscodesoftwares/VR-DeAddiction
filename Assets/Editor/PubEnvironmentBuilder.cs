@@ -94,6 +94,7 @@ public static class PubEnvironmentBuilder
         _brands = null;   // rebuilt against this run's materials
 
         CreateMaterials();
+        LoadGrabAudio();   // before ANY builder runs: several create grabbables
 
         GameObject root = new GameObject(RootName);
         root.transform.position = Vector3.zero;
@@ -265,6 +266,27 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_CoolerRed", Rgb(176, 32, 34), 0.48f, 0.10f);
         Mat("Mat_Pub_DarkWood", Rgb(64, 44, 32), 0.22f, 0f);
         MatTransparent("Mat_Pub_GlassClear", new Color(0.78f, 0.85f, 0.86f, 0.28f), 0.92f);
+
+        // Jack Daniel's ---------------------------------------------------------
+        // The only textured materials in the project. Everywhere else the
+        // palette is flat colour, which is what keeps 41 materials instancing
+        // cheaply -- but a brand label cannot be a flat colour, and the brand
+        // IS the therapeutic cue.
+        MatTransparent("Mat_JD_Glass", new Color(0.42f, 0.22f, 0.07f, 0.62f), 0.94f);
+        Mat("Mat_JD_Whiskey", Rgb(150, 74, 16), 0.78f, 0f);
+        MatTextured("Mat_JD_Label", "Assets/Textures/JD_Label.jpg", 0.30f);
+        MatTextured("Mat_JD_Cap", "Assets/Textures/JD_Cap.png", 0.42f);
+
+        // Whiskey glass ---------------------------------------------------------
+        // Game-ready source: 1,490 triangles, already baked to low-poly with
+        // normal maps, so the cut-glass facets are shading detail rather than
+        // geometry. The alpha here is uniform -- the supplied opacity maps are
+        // effectively flat, so there is nothing to gain from compositing them.
+        MatTextured("Mat_WG_Glass", "Assets/Textures/WG_Glass_BaseColor.png", 0.95f,
+                    "Assets/Textures/WG_Glass_Normal.png",
+                    new Color(1f, 1f, 1f, 0.42f), transparent: true);
+        MatTextured("Mat_WG_Whiskey", "Assets/Textures/WG_Whiskey_BaseColor.png", 0.80f,
+                    "Assets/Textures/WG_Whiskey_Normal.png");
 
         // Clutter -------------------------------------------------------------
         Mat("Mat_Pub_WaterCase", Rgb(178, 206, 214), 0.62f, 0f);
@@ -549,6 +571,76 @@ public static class PubEnvironmentBuilder
     /// primitives have no vertex colour channel, and what a shader reads for a
     /// missing channel is not guaranteed.
     /// </summary>
+    /// <summary>
+    /// A Standard material carrying a real texture. Used only for the branded
+    /// bottle: see the note where these are declared.
+    /// </summary>
+    static Material MatTextured(string name, string texturePath, float smoothness,
+                                string normalPath = null, Color? tint = null,
+                                bool transparent = false)
+    {
+        string path = MaterialFolder + "/" + name + ".mat";
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (m == null)
+        {
+            m = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(m, path);
+        }
+        m.shader = Shader.Find("Standard");
+
+        Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+        if (tex == null)
+            Debug.LogWarning("[PubEnvironment] Missing texture " + texturePath);
+        m.SetTexture("_MainTex", tex);
+
+        if (!string.IsNullOrEmpty(normalPath))
+        {
+            Texture2D nrm = AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath);
+            if (nrm == null)
+                Debug.LogWarning("[PubEnvironment] Missing normal map " + normalPath);
+            m.SetTexture("_BumpMap", nrm);
+            m.EnableKeyword("_NORMALMAP");
+        }
+
+        m.SetColor("_Color", tint ?? Color.white);
+        m.SetFloat("_Glossiness", smoothness);
+        m.SetFloat("_Metallic", 0f);
+
+        if (transparent)
+        {
+            m.SetFloat("_Mode", 3f);
+            m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            m.SetFloat("_ZWrite", 0f);
+            m.DisableKeyword("_ALPHATEST_ON");
+            m.EnableKeyword("_ALPHABLEND_ON");
+            m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            m.renderQueue = 3000;
+        }
+
+        m.enableInstancing = true;
+        EditorUtility.SetDirty(m);
+        _mats[name] = m;
+        return m;
+    }
+
+    /// <summary>
+    /// Picks the shader a material should actually render with.
+    ///
+    /// VertexGrime is colour-only -- it has no _MainTex -- so pushing a
+    /// textured material through it silently discards the texture and the
+    /// label would render as flat brown. Textured materials therefore keep
+    /// their own shader. They lose nothing by it: grime is driven by vertex
+    /// colours, and an imported model has none, so the effect would be a no-op
+    /// on this mesh anyway.
+    /// </summary>
+    static Material Shade(Material flat)
+    {
+        if (flat != null && flat.HasProperty("_MainTex") && flat.GetTexture("_MainTex") != null)
+            return flat;
+        return GrimeVariant(flat);
+    }
+
     static Material GrimeVariant(Material flat)
     {
         if (flat == null)
@@ -610,7 +702,7 @@ public static class PubEnvironmentBuilder
         go.transform.localRotation = src.transform.localRotation;
         go.transform.localScale = src.transform.localScale;
 
-        Material grimeMat = GrimeVariant(mat);
+        Material grimeMat = Shade(mat);
 
         foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>())
         {
@@ -624,7 +716,7 @@ public static class PubEnvironmentBuilder
                 {
                     Material slotMat = (i < slotMaterials.Length && slotMaterials[i] != null)
                         ? slotMaterials[i] : mat;
-                    assigned[i] = GrimeVariant(slotMat);
+                    assigned[i] = Shade(slotMat);
                 }
                 mr.sharedMaterials = assigned;
             }
@@ -1327,6 +1419,10 @@ public static class PubEnvironmentBuilder
 
         MakeGrabbable(group, bc, mass);
 
+        // Glass clink on pickup. Attached HERE and not in MakeGrabbable, so it
+        // covers the drinkware and not the chairs -- a chair should not chime.
+        group.gameObject.AddComponent<GrabClink>().Clip = _clinkClip;
+
         Rigidbody rb = group.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -1836,17 +1932,30 @@ public static class PubEnvironmentBuilder
         Color tubeWhite = new Color(0.90f, 0.945f, 1f);
 
         // Pixel: three pendants down the centre, spaced to cover the hall.
-        // Downlights, so they cast shadows -- see Downlight().
+        //
+        // ONLY ONE OF THEM CASTS SHADOWS. Four shadowed lights meant four extra
+        // shadow-map renders every frame, each redrawing every caster inside a
+        // 7 m cone in a hall of ~690 renderers. Draw calls are this project's
+        // real constraint, and that was enough to lose the 72 fps lock.
+        //
+        // The one that keeps its shadows is the pendant over the hero table --
+        // z = 0.2 against the table at z = 1.4 -- because the seated scenario
+        // is the only place a patient studies objects closely enough for
+        // contact shadows to matter. The rest of the hall is walked through.
         for (int i = 0; i < 3; i++)
         {
             float z = -HalfD + 4.0f + i * 6.2f;
+            bool overHeroTable = Mathf.Abs(z - PubScenarioBuilder.TableZ) < 3f;
+
             Downlight(g, "Lamp_Pendant_C" + i, new Vector3(0f, EavesHeight - 1.15f, z),
-                      warmBulb, 2.55f, 7.2f);
+                      warmBulb, 2.55f, 7.2f, castShadows: overHeroTable);
         }
 
         // Pixel: the counter, always the brightest point in these bars.
+        // No shadows: it is across the room from the seated table and lights
+        // the busiest cluster of geometry in the scene.
         Downlight(g, "Lamp_Counter", new Vector3(1.9f, 2.7f, HalfD - 2.0f),
-                  new Color(1f, 0.905f, 0.735f), 2.55f, 6.8f);
+                  new Color(1f, 0.905f, 0.735f), 2.55f, 6.8f, castShadows: false);
 
         // Vertex fill: extra pendants between the pixel ones, so the light does
         // not band into stripes along the hall.
@@ -1921,7 +2030,7 @@ public static class PubEnvironmentBuilder
     /// to hold.
     /// </summary>
     static void Downlight(Transform parent, string name, Vector3 pos, Color color,
-                          float intensity, float range)
+                          float intensity, float range, bool castShadows)
     {
         GameObject go = new GameObject(name);
         go.transform.SetParent(parent, false);
@@ -1938,11 +2047,17 @@ public static class PubEnvironmentBuilder
         l.innerSpotAngle = 55f;
         l.renderMode = LightRenderMode.ForcePixel;
 
-        l.shadows = LightShadows.Soft;
-        l.shadowStrength = InteriorShadowStrength;
-        l.shadowBias = 0.04f;
-        l.shadowNormalBias = 0.45f;
-        l.shadowNearPlane = 0.2f;
+        l.shadows = castShadows ? LightShadows.Soft : LightShadows.None;
+        if (castShadows)
+        {
+            l.shadowStrength = InteriorShadowStrength;
+            l.shadowBias = 0.04f;
+            l.shadowNormalBias = 0.45f;
+            l.shadowNearPlane = 0.2f;
+            // A small map is the cheap way to a soft edge: fewer, larger texels
+            // blur under the soft filter AND cost less to render and sample.
+            l.shadowCustomResolution = 256;
+        }
         _objectCount++;
 
         // Companion wash, so the ceiling around the lamp is not black.
@@ -2002,6 +2117,120 @@ public static class PubEnvironmentBuilder
         m.SetFloat("_Exposure", 0.62f);
         EditorUtility.SetDirty(m);
         return m;
+    }
+
+    /// <summary>
+    /// Strokes for a blocky sans-serif alphabet, in a unit cell: each entry is
+    /// (x, y, width, height) with 0,0 at the letter's bottom-left and 1,1 at
+    /// its top-right.
+    ///
+    /// Only the letters this project actually paints are defined. Diagonals are
+    /// squared off deliberately -- an angled box on a sign reads as a mistake,
+    /// while a blocky capital reads as signwriting, which is what these boards
+    /// are.
+    /// </summary>
+    static readonly Dictionary<char, float[][]> k_Glyphs = new Dictionary<char, float[][]>
+    {
+        ['T'] = new[]
+        {
+            new[] { 0.00f, 0.85f, 1.00f, 0.15f },   // top bar
+            new[] { 0.41f, 0.00f, 0.18f, 0.85f },   // stem
+        },
+        ['A'] = new[]
+        {
+            new[] { 0.00f, 0.00f, 0.18f, 0.84f },   // left leg
+            new[] { 0.82f, 0.00f, 0.18f, 0.84f },   // right leg
+            new[] { 0.00f, 0.84f, 1.00f, 0.16f },   // top
+            new[] { 0.18f, 0.42f, 0.64f, 0.14f },   // crossbar
+        },
+        ['S'] = new[]
+        {
+            new[] { 0.00f, 0.86f, 1.00f, 0.14f },   // top
+            new[] { 0.00f, 0.50f, 0.18f, 0.36f },   // upper left
+            new[] { 0.00f, 0.43f, 1.00f, 0.14f },   // middle
+            new[] { 0.82f, 0.14f, 0.18f, 0.29f },   // lower right
+            new[] { 0.00f, 0.00f, 1.00f, 0.14f },   // bottom
+        },
+        ['M'] = new[]
+        {
+            new[] { 0.00f, 0.00f, 0.18f, 1.00f },   // left
+            new[] { 0.82f, 0.00f, 0.18f, 1.00f },   // right
+            new[] { 0.00f, 0.86f, 1.00f, 0.14f },   // top
+            new[] { 0.41f, 0.40f, 0.18f, 0.46f },   // centre drop
+        },
+        ['C'] = new[]
+        {
+            new[] { 0.00f, 0.86f, 1.00f, 0.14f },   // top
+            new[] { 0.00f, 0.14f, 0.18f, 0.72f },   // spine
+            new[] { 0.00f, 0.00f, 1.00f, 0.14f },   // bottom
+        },
+    };
+
+    /// <summary>
+    /// Paints a word onto a flat surface as raised box strokes, centred on
+    /// <paramref name="centre"/> and fitted inside <paramref name="width"/>.
+    /// The letters face -Z, which is the direction the compound's signboard
+    /// looks out toward the street.
+    /// </summary>
+    static void SignText(Transform parent, string word, Vector3 centre,
+                         float width, float height, Material mat)
+    {
+        if (string.IsNullOrEmpty(word))
+            return;
+
+        Transform g = Group(parent, "Signboard_Text");
+
+        // Fit to the board width: letters plus the gaps between them.
+        const float gapFraction = 0.22f;              // of one letter's width
+        float letterW = width / (word.Length + (word.Length - 1) * gapFraction);
+        float gap = letterW * gapFraction;
+        float depth = 0.025f;
+
+        float x = centre.x - width * 0.5f;
+
+        for (int i = 0; i < word.Length; i++)
+        {
+            char c = char.ToUpperInvariant(word[i]);
+            if (k_Glyphs.TryGetValue(c, out float[][] strokes))
+            {
+                for (int sIdx = 0; sIdx < strokes.Length; sIdx++)
+                {
+                    float[] r = strokes[sIdx];
+                    float sw = r[2] * letterW;
+                    float sh = r[3] * height;
+
+                    Box($"Sign_{c}{i}_{sIdx}", g,
+                        new Vector3(x + (r[0] + r[2] * 0.5f) * letterW,
+                                    centre.y - height * 0.5f + (r[1] + r[3] * 0.5f) * height,
+                                    centre.z),
+                        new Vector3(sw, sh, depth), mat);
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"[PubEnvironment] No glyph for '{c}'; skipped.");
+            }
+
+            x += letterW + gap;
+        }
+    }
+
+    /// <summary>
+    /// Loads the shared clink clip once. GrabClink holds it statically because
+    /// every bottle plays the same sound -- storing a reference per object
+    /// would serialise ~75 copies of the same pointer into the scene.
+    /// </summary>
+    static AudioClip _clinkClip;
+
+    static void LoadGrabAudio()
+    {
+        _clinkClip = AssetDatabase.LoadAssetAtPath<AudioClip>(
+            "Assets/Audio/Grab/Clink.wav");
+
+        if (_clinkClip == null)
+            Debug.LogWarning("[PubEnvironment] Clink.wav missing; grabs stay silent.");
+        else
+            Debug.Log("[PubEnvironment] Grab clink loaded.");
     }
 
     static void ConfigureRenderSettings()
@@ -2165,6 +2394,17 @@ public static class PubEnvironmentBuilder
         Box("Signboard_Inner", gate,
             new Vector3(0f, signY, fZ - 0.07f),
             new Vector3(signW - 0.5f, signH - 0.40f, 0.02f), cream);
+
+        // "TASMAC" across the board, in dark green on the cream panel -- the
+        // way these signs are actually painted. Letters are BUILT, not
+        // rendered from a font: a TextMesh would drag in a font atlas and an
+        // unlit transparent shader for six characters, and this environment
+        // already makes everything else out of boxes.
+        SignText(gate, "TASMAC",
+                 new Vector3(0f, signY, fZ - 0.095f),
+                 signW - 0.9f,          // leave a margin inside the cream panel
+                 (signH - 0.40f) * 0.62f,
+                 signGreen);
 
         // ---- Gate leaves (half-height wooden, slightly ajar) ----
         Transform leaves = Group(g, "GateLeaves");
