@@ -42,6 +42,16 @@ public class GrabClink : MonoBehaviour
              "a grab that flickers on and off from machine-gunning.")]
     public float Retrigger = 0.12f;
 
+    // Set a little BELOW FootstepAudio.Volume rather than equal to it.
+    //
+    // The two clips are normalised to the same peak, so matching the numbers
+    // would match them on a meter -- but not to the ear. A clink is a short
+    // bright transient and a footstep is a dull thud, and bright sounds read as
+    // louder at equal amplitude. Sitting the clink slightly lower is what makes
+    // them sound level.
+    [Tooltip("Loudness of a clink. Balanced against FootstepAudio.Volume.")]
+    public float Volume = 0.09f;
+
     XRGrabInteractable _grab;
     float _lastPlayed = -99f;
 
@@ -68,7 +78,7 @@ public class GrabClink : MonoBehaviour
             return;
 
         _lastPlayed = Time.time;
-        ClinkPool.Play(Clip, transform.position);
+        ClinkPool.Play(Clip, transform.position, Volume);
     }
 }
 
@@ -109,7 +119,7 @@ public static class ClinkPool
         }
     }
 
-    public static void Play(AudioClip clip, Vector3 at)
+    public static void Play(AudioClip clip, Vector3 at, float volume)
     {
         if (clip == null)
             return;
@@ -122,6 +132,6 @@ public static class ClinkPool
         // Glass is never struck identically twice. A little pitch and level
         // spread is the difference between a prop and a sound effect.
         s.pitch = Random.Range(0.93f, 1.08f);
-        s.PlayOneShot(clip, Random.Range(0.55f, 0.8f));
+        s.PlayOneShot(clip, volume * Random.Range(0.85f, 1f));
     }
 }

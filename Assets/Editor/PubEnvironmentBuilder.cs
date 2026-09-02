@@ -257,6 +257,12 @@ public static class PubEnvironmentBuilder
 
         // Furniture -----------------------------------------------------------
         Mat("Mat_Pub_ConcreteTable", Rgb(126, 124, 118), 0.20f, 0f);
+        // Round bar table. Textured rather than flat, so it keeps its grain and
+        // wear -- Shade() sends textured materials straight through and skips
+        // the vertex-colour grime shader, which has no _MainTex and would throw
+        // the wood away.
+        MatTextured("Mat_Pub_TableWood", "Assets/Textures/Table_Wood.png", 0.22f,
+                    normalPath: "Assets/Textures/Table_Wood_Normal.png");
         Mat("Mat_Pub_ChairRed", Rgb(190, 34, 44), 0.55f, 0f);
         Mat("Mat_Pub_ChairBlue", Rgb(36, 68, 158), 0.55f, 0f);
         Mat("Mat_Pub_ChairGreen", Rgb(58, 158, 62), 0.55f, 0f);
@@ -335,7 +341,13 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_LiquidBlue",  Rgb(74, 146, 176), 0.82f, 0f);
 
         // Compound / exterior ------------------------------------------------
-        Mat("Mat_Pub_DirtGround",     Rgb(148, 132, 108), 0.08f, 0f);
+        // Yard ground: ambientCG Ground109, a CC0 photogrammetry SURFACE (as
+        // opposed to a scanned mesh) so it is genuinely seamless and ships a
+        // normal map. The normal is what stops the ground reading as a
+        // photograph laid flat -- without it the pebbles have colour but no
+        // relief and never catch the light as you walk past.
+        MatTextured("Mat_Pub_DirtGround", "Assets/Textures/Ground_Dirt.png", 0.06f,
+                    normalPath: "Assets/Textures/Ground_Dirt_Normal.png");
         Mat("Mat_Pub_CompoundWall",   Rgb(202, 190, 162), 0.06f, 0f);
         Mat("Mat_Pub_GateWood",       Rgb(168, 128, 68),  0.18f, 0f);
         Mat("Mat_Pub_SignboardGreen", Rgb(26, 78, 44),    0.15f, 0f);
@@ -577,7 +589,7 @@ public static class PubEnvironmentBuilder
     /// </summary>
     static Material MatTextured(string name, string texturePath, float smoothness,
                                 string normalPath = null, Color? tint = null,
-                                bool transparent = false)
+                                bool transparent = false, Vector2? tiling = null)
     {
         string path = MaterialFolder + "/" + name + ".mat";
         Material m = AssetDatabase.LoadAssetAtPath<Material>(path);
@@ -617,6 +629,9 @@ public static class PubEnvironmentBuilder
             m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
             m.renderQueue = 3000;
         }
+
+        if (tiling.HasValue)
+            m.mainTextureScale = tiling.Value;
 
         m.enableInstancing = true;
         EditorUtility.SetDirty(m);
@@ -1469,6 +1484,30 @@ public static class PubEnvironmentBuilder
         MakeGrabbable(group, seat, 4.5f);
     }
 
+    /// <summary>
+    /// Collision for a round table.
+    ///
+    /// A box cannot describe a disc: sized to the diameter its corners stand
+    /// out past the edge and glasses rest on thin air, and inscribed in the
+    /// circle it stops short and they fall through the rim. Approximating with
+    /// rotated boxes would take several per table.
+    ///
+    /// Tables are STATIC, and a static MeshCollider does not need to be convex
+    /// -- so the mesh itself becomes the collider, exactly matching what the
+    /// eye sees, for 1,242 triangles in a BVH that is never rebuilt.
+    /// </summary>
+    static void AddTableCollider(GameObject model)
+    {
+        foreach (MeshFilter mf in model.GetComponentsInChildren<MeshFilter>())
+        {
+            if (mf.sharedMesh == null)
+                continue;
+            MeshCollider mc = mf.gameObject.AddComponent<MeshCollider>();
+            mc.sharedMesh = mf.sharedMesh;
+            mc.convex = false;
+        }
+    }
+
     static int _grabbableCount;
 
     // ---------------------------------------------------------------- seating
@@ -1506,13 +1545,17 @@ public static class PubEnvironmentBuilder
                 for (int s = 0; s < ChairsPerTable; s++)
                 {
                     float ang = 90f * s + Rand(-16f, 16f);
-                    // Clearance maths, not taste: the table collider is
-                    // 1.17 x 0.82 (half-width 0.585) and a chair's leg box is
-                    // 0.42 x 0.41 (half-depth 0.21). A side chair at 0.78 m
-                    // reached x = 0.57 and overlapped the table, so physics
-                    // depenetrated it on load and flung the chairs around the
-                    // room. 0.95 m clears with room to spare.
-                    float dist = Rand(0.95f, 1.05f);
+                    // Clearance maths, not taste. The table is now a DISC of
+                    // radius 0.367, not a 1.17 x 0.82 slab, so the old 0.95 m
+                    // spacing left chairs marooned a third of a metre from the
+                    // edge. A chair's leg box is 0.41 deep (half-depth 0.21),
+                    // so 0.367 + 0.21 = 0.577 is the contact distance and
+                    // 0.70-0.78 tucks them in with a hand's width to spare.
+                    //
+                    // Being round, this holds in every direction -- the old
+                    // rectangle needed the worst case (the short side) applied
+                    // all the way round, which is what pushed them out so far.
+                    float dist = Rand(0.70f, 0.78f);
                     float rad = ang * Mathf.Deg2Rad;
                     Vector3 p = new Vector3(Mathf.Sin(rad) * dist, 0f, -Mathf.Cos(rad) * dist);
                     // Yaw must be -ang, not ang+180.
@@ -1551,17 +1594,18 @@ public static class PubEnvironmentBuilder
         }
     }
 
+    /// <summary>Radius of the round table top. Chair spacing, the containment
+    /// lip and the hero table's prop layout are all derived from this.</summary>
+    public const float TableRadius = 0.367f;
+
     static void ConcreteTable(Transform parent, Material mat)
     {
-        GameObject model = Model("Asset_ConcreteTable", parent, Vector3.zero, 0f, mat);
+        GameObject model = Model("Asset_RoundTable", parent, Vector3.zero, 0f,
+                                 M("Mat_Pub_TableWood") ?? mat);
 
         if (model != null)
         {
-            // Imported meshes carry no collider, but bottles and glasses must
-            // rest on the table rather than fall through it.
-            BoxCollider bc = model.AddComponent<BoxCollider>();
-            bc.center = new Vector3(0f, 0.3875f, 0f);
-            bc.size = new Vector3(1.17f, 0.775f, 0.82f);
+            AddTableCollider(model);
             return;
         }
 
@@ -2233,9 +2277,65 @@ public static class PubEnvironmentBuilder
             Debug.Log("[PubEnvironment] Grab clink loaded.");
     }
 
+    const string PanoramaPath = "Assets/Textures/Sky_Overcast.png";
+    const string PanoMatPath = "Assets/PubEnvironment/Materials/Mat_Sky_Panorama.mat";
+
+    /// <summary>
+    /// Overcast sky from a 2:1 equirectangular panorama.
+    ///
+    /// Skybox/Panoramic in Lat-Long mode is what reads a 2:1 image correctly --
+    /// handed to Skybox/6 Sided or Cubemap it comes out smeared.
+    ///
+    /// This particular image suits the scene in a way a photographic sky
+    /// usually does not: it is fully overcast with NO SUN DISC, so it does not
+    /// contradict the directional light sitting at 84 degrees overhead. A sky
+    /// with a visible low sun would have shadows falling straight down while
+    /// the horizon said sunset.
+    ///
+    /// It is low resolution (1774x887) and will be soft in a headset. That is
+    /// tolerable here only because the content is diffuse cloud with no fine
+    /// detail to lose; the same resolution on a detailed skyline would look
+    /// broken.
+    ///
+    /// Falls back to the procedural sky if the texture is ever missing, so a
+    /// lost file degrades to a grey sky rather than to Unity's default blue.
+    /// </summary>
+    static Material PanoramaSky()
+    {
+        Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(PanoramaPath);
+        Shader sky = Shader.Find("Skybox/Panoramic");
+        if (tex == null || sky == null)
+        {
+            Debug.LogWarning("[PubEnvironment] Panorama sky unavailable; using procedural.");
+            return null;
+        }
+
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(PanoMatPath);
+        if (m == null)
+        {
+            m = new Material(sky);
+            AssetDatabase.CreateAsset(m, PanoMatPath);
+        }
+
+        m.shader = sky;
+        m.SetTexture("_MainTex", tex);
+        m.SetFloat("_Mapping", 1f);        // Latitude-Longitude
+        m.SetFloat("_ImageType", 0f);      // 360 degrees
+        m.SetFloat("_MirrorOnBack", 0f);
+        m.SetFloat("_Layout", 0f);         // no stereo split
+        m.SetFloat("_Rotation", 0f);
+        // Held just under 1 so the sky stays a touch darker than the lit
+        // interior, which is what keeps the bulbs reading as the light source.
+        m.SetFloat("_Exposure", 0.88f);
+        m.SetColor("_Tint", new Color(0.5f, 0.5f, 0.5f));   // neutral, no colour cast
+        EditorUtility.SetDirty(m);
+        Debug.Log("[PubEnvironment] Overcast panorama sky applied.");
+        return m;
+    }
+
     static void ConfigureRenderSettings()
     {
-        Material sky = OvercastSky();
+        Material sky = PanoramaSky() ?? OvercastSky();
         if (sky != null)
             RenderSettings.skybox = sky;
         // Ambient is deliberately near-black. With a sealed roof the bulbs are
@@ -2298,9 +2398,23 @@ public static class PubEnvironmentBuilder
         Transform ground = Group(g, "Ground");
 
         // Compound yard (dirt, slightly below building floor to avoid z-fighting)
+        float yardX = cHW * 2f + t * 2f + 0.5f;
+        float yardZ = cDep + t * 2f + 0.5f;
         Box("YardGround", ground, new Vector3(0f, -0.04f, cCZ),
-            new Vector3(cHW * 2f + t * 2f + 0.5f, 0.06f, cDep + t * 2f + 0.5f),
-            dirt, true);
+            new Vector3(yardX, 0.06f, yardZ), dirt, true);
+
+        // 2.8 m per repeat, because that is the real-world size ambientCG
+        // captured. Matching it puts the pebbles at life size instead of at
+        // whatever scale looked plausible -- a guess this asset happens to
+        // remove the need for.
+        const float DirtTileMetres = 2.8f;
+        dirt.mainTextureScale = new Vector2(yardX / DirtTileMetres,
+                                            yardZ / DirtTileMetres);
+
+        // The worn path is deferred. It was a hard-edged box, which reads as a
+        // slab dropped on the yard however good the dirt looks -- real trodden
+        // earth has no edge, it fades. Fixing that needs a soft alpha falloff,
+        // not a better texture, so it comes back as its own piece of work.
 
         // Street / road outside the compound gate
         Box("StreetGround", ground, new Vector3(0f, -0.05f, fZ - 5f),

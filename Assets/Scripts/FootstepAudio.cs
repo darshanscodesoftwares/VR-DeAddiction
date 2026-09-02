@@ -42,8 +42,9 @@ public class FootstepAudio : MonoBehaviour
              "stalls -- a doorway, a bump -- from restarting the cycle.")]
     public float StopGrace = 0.18f;
 
-    [Tooltip("Loudness of a footstep at walking pace.")]
-    public float Volume = 0.30f;
+    [Tooltip("Loudness of a footstep at walking pace. Balanced against " +
+             "GrabClink.Volume so one headset volume suits both.")]
+    public float Volume = 0.45f;
 
     [Tooltip("Stereo separation between the feet. 0 = centred, 1 = hard sides.")]
     [Range(0f, 1f)] public float FootSpread = 0.35f;

@@ -39,13 +39,20 @@ public static class PubScenarioBuilder
         // ---- The hero table --------------------------------------------------
         // Yaw 0, not 4 deg: the seat anchor faces +Z, so any table rotation
         // leaves you sitting skewed to the table edge.
-        GameObject table = model("Asset_ConcreteTable", g, tableCentre, 0f,
-                                 mat("Mat_Pub_ConcreteTable"), true);
+        GameObject table = model("Asset_RoundTable", g, tableCentre, 0f,
+                                 mat("Mat_Pub_TableWood"), true);
         if (table != null)
         {
-            BoxCollider bc = table.AddComponent<BoxCollider>();
-            bc.center = new Vector3(0f, TableTop * 0.5f, 0f);
-            bc.size = new Vector3(1.17f, TableTop, 0.82f);
+            // Static mesh collider, so the disc collides as a disc. A box would
+            // either overhang the rim or stop short of it -- see
+            // PubEnvironmentBuilder.AddTableCollider.
+            foreach (MeshFilter mf in table.GetComponentsInChildren<MeshFilter>())
+            {
+                if (mf.sharedMesh == null) continue;
+                MeshCollider mc = mf.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = mf.sharedMesh;
+                mc.convex = false;
+            }
         }
 
         // ---- Seat and marker ---------------------------------------------------
@@ -121,12 +128,18 @@ public static class PubScenarioBuilder
 
         // Laid out as a real table is: drinks toward the drinker, shared water
         // and food in the middle, ashtray pushed to the edge.
+        // EVERY PROP MUST NOW FIT A CIRCLE, not a 1.10 x 0.76 rectangle. The
+        // round table's radius is 0.367, so with the widest prop at 0.052 the
+        // usable centre-distance is about 0.30 m. Positions below are chosen
+        // against that limit and against each other, not by eye: drinks toward
+        // the far side, glasses within easy reach on the near side where the
+        // patient sits at -Z.
         AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_BeerBottle", tableCentre + new Vector3(-0.30f, TableTop, 0.10f),
+                "Asset_BeerBottle", tableCentre + new Vector3(-0.18f, TableTop, 0.14f),
                 "Mat_Pub_GlassGreen", 0.042f, 0.302f, 0.6f, 18f);
 
         AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_BeerBottle", tableCentre + new Vector3(-0.13f, TableTop, 0.19f),
+                "Asset_BeerBottle", tableCentre + new Vector3(-0.02f, TableTop, 0.25f),
                 "Mat_Pub_GlassGreen", 0.042f, 0.302f, 0.6f, -35f);
 
         // The branded bottle. Real detail only where the patient actually looks:
@@ -143,18 +156,18 @@ public static class PubScenarioBuilder
         //
         // Slot order is fixed by the Blender script: glass, whiskey, label, cap.
         AddPropSlots(props, propRoot, modelSlots, grabbableUpright,
-                     "Asset_JackDaniels", tableCentre + new Vector3(0.28f, TableTop, 0.16f),
+                     "Asset_JackDaniels", tableCentre + new Vector3(0.15f, TableTop, 0.16f),
                      new[] { mat("Mat_JD_Glass"), mat("Mat_JD_Whiskey"),
                              mat("Mat_JD_Label"), mat("Mat_JD_Cap") },
                      0.052f, 0.290f, 1.0f, 62f);
 
         AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_WaterBottle", tableCentre + new Vector3(0.02f, TableTop, 0.02f),
+                "Asset_WaterBottle", tableCentre + new Vector3(0.24f, TableTop, -0.02f),
                 "Mat_Pub_GlassClear", 0.038f, 0.276f, 0.4f, 12f);
 
         // Two tumblers within easy seated reach.
         AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_SteelTumbler", tableCentre + new Vector3(-0.16f, TableTop, -0.20f),
+                "Asset_SteelTumbler", tableCentre + new Vector3(-0.16f, TableTop, -0.13f),
                 "Mat_Pub_Metal", 0.038f, 0.090f, 0.25f, 0f);
 
         // Detailed glass, within seated reach. Unlike the bottle this source
@@ -162,7 +175,7 @@ public static class PubScenarioBuilder
         // facets baked into a normal map instead of carved into geometry.
         // Slot order is fixed by the Blender script: glass, whiskey.
         AddPropSlots(props, propRoot, modelSlots, grabbableUpright,
-                     "Asset_WhiskeyGlass", tableCentre + new Vector3(0.12f, TableTop, -0.22f),
+                     "Asset_WhiskeyGlass", tableCentre + new Vector3(0.06f, TableTop, -0.16f),
                      new[] { mat("Mat_WG_Glass"), mat("Mat_WG_Whiskey") },
                      0.042f, 0.100f, 0.30f, 0f);
 
@@ -175,7 +188,7 @@ public static class PubScenarioBuilder
         // computed against real extents rather than eyeballed -- eyeballing is
         // what put chairs inside tables earlier in this project.
         AddProp(props, propRoot, model, mat, grabbableUpright,
-                "Asset_TableGlass", tableCentre + new Vector3(0.34f, TableTop, -0.14f),
+                "Asset_TableGlass", tableCentre + new Vector3(0.20f, TableTop, -0.20f),
                 "Mat_Pub_GlassClear", 0.049f, 0.114f, 0.25f, 0f);
 
         // Food plate removed at the user's request.
@@ -190,14 +203,17 @@ public static class PubScenarioBuilder
         volume.transform.localPosition = tableCentre + new Vector3(0f, TableTop, 0f);
 
         var containment = volume.AddComponent<TableContainment>();
-        containment.Bounds = new Vector3(0.70f, 0.90f, 0.52f);
+        containment.Bounds = new Vector3(0.46f, 0.90f, 0.46f);
 
         // Low invisible lip around the rim: stops things rolling off on their
         // own, without the hard glass-box feel of a full barrier.
-        // Table top is 1.10 x 0.76, so half-extents are 0.55 x 0.38. The lip
-        // was at 0.62 x 0.45 -- OUTSIDE the table edge, so objects rolled off
-        // into open air before ever reaching it. Inside the edge, and taller.
-        BuildLip(volume.transform, 0.515f, 0.345f);
+        //
+        // A RING now, not a rectangle. Four straight walls around a disc leave
+        // the corners hanging over open air and cut across the rim on the flats
+        // -- objects would stop dead well inside the visible edge on one axis
+        // and roll off it on another. Twelve short segments sit just inside the
+        // 0.367 rim all the way round.
+        BuildLipRing(volume.transform, 0.335f);
 
         foreach (XRGrabInteractable gi in props)
         {
@@ -257,6 +273,38 @@ public static class PubScenarioBuilder
     /// Renderer-less collider lip around the table rim. Invisible, but a bottle
     /// nudged sideways stops instead of rolling off.
     /// </summary>
+    /// <summary>
+    /// Invisible rim for a ROUND table: short collider segments arranged on a
+    /// circle, each turned to face the centre. Twelve is enough that a rolling
+    /// bottle meets a wall rather than a corner between two of them.
+    /// </summary>
+    static void BuildLipRing(Transform parent, float radius)
+    {
+        const int Segments = 12;
+        const float lipH = 0.075f;
+        const float t = 0.03f;
+
+        // Chord length of one segment, plus a little overlap so there is no gap
+        // where two segments meet.
+        float seg = 2f * radius * Mathf.Sin(Mathf.PI / Segments) * 1.15f;
+
+        for (int i = 0; i < Segments; i++)
+        {
+            float a = (360f / Segments) * i;
+            float rad = a * Mathf.Deg2Rad;
+
+            GameObject go = new GameObject("Lip_" + i);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = new Vector3(Mathf.Sin(rad) * radius,
+                                                     lipH * 0.5f,
+                                                     Mathf.Cos(rad) * radius);
+            go.transform.localEulerAngles = new Vector3(0f, a, 0f);
+
+            BoxCollider bc = go.AddComponent<BoxCollider>();
+            bc.size = new Vector3(seg, lipH, t);
+        }
+    }
+
     static void BuildLip(Transform parent, float halfX, float halfZ)
     {
         const float lipH = 0.075f;

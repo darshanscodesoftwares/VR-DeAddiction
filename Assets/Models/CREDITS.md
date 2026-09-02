@@ -47,3 +47,37 @@ rather than one sample played twice.
 
 Derived: the source is 5.18 s, of which only the first ~0.35 s is sound and the
 rest digital silence. Trimmed to 0.42 s, normalised and tail-faded.
+
+---
+
+## Ground texture
+
+- Files: `Assets/Textures/Ground_Dirt.png`, `Ground_Dirt_Normal.png`
+- Source: **ambientCG "Ground 109"** — https://ambientcg.com/a/Ground109
+- Licence: **CC0**. No attribution required; recorded here for provenance only.
+
+Derived: the 2K Color and NormalGL maps, downscaled to 1024 because
+TextureImportRules caps non-sky textures there anyway. NormalGL, not NormalDX --
+Unity expects the OpenGL convention. Tiled at 2.8 m, the capture's stated
+real-world size, so the pebbles are life-size.
+
+## Round bar table
+
+- File: `Assets/Models/Asset_RoundTable.fbx`, `Assets/Textures/Table_Wood*.png`
+- Source: Sketchfab, "Round Bar Table" by **TabbieCat**
+- **Licence not recorded — confirm before release.**
+
+Derived: 1,242 triangles as downloaded, not decimated. Scaled from its native
+0.945 m bar height to the project's 0.775 m table height, which takes the
+diameter to 0.734 m. Textures are the 2K BaseColor and Normal at 1024.
+
+## Sky
+
+- File: `Assets/Textures/Sky_Overcast.png`
+- Source: "PS1 cloudy skybox" (`ps1-cloudy-skybox-2`, texture `nightsk.png`)
+- **Licence not recorded — confirm before release.**
+
+Derived: the source is a 4-bit PALETTE-INDEXED image -- 16 colours faking a
+gradient with ordered dithering, which in a headset reads as a sky made of dots.
+De-dithered by a wrapped Gaussian blur (a dither pattern's local mean IS the
+colour it approximates), contrast restored, saved as 8-bit RGB.
