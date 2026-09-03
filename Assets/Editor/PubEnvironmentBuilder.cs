@@ -835,8 +835,23 @@ public static class PubEnvironmentBuilder
     /// </summary>
     static Material Shade(Material flat)
     {
-        if (flat != null && flat.HasProperty("_MainTex") && flat.GetTexture("_MainTex") != null)
+        if (flat == null)
+            return GrimeVariant(flat);
+
+        // Textured materials keep their texture: VertexGrime has no _MainTex.
+        if (flat.HasProperty("_MainTex") && flat.GetTexture("_MainTex") != null)
             return flat;
+
+        // EMISSIVE materials keep their emission, for the same reason -- the
+        // grime shader has no emission either, so a light source handed through
+        // here comes back unlit. The wall lights' emitter strips went dark
+        // exactly this way: the fixture rendered, its bulb did not glow, and
+        // nothing in the scene said why.
+        if (flat.IsKeywordEnabled("_EMISSION") ||
+            (flat.HasProperty("_EmissionColor") &&
+             flat.GetColor("_EmissionColor").maxColorComponent > 0.001f))
+            return flat;
+
         return GrimeVariant(flat);
     }
 
