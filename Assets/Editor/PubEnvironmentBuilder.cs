@@ -425,6 +425,10 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_StreetGrey",     Rgb(92, 88, 84),    0.10f, 0f);
         MatTextured("Mat_Pub_BarLamp", "Assets/Textures/BarLamp.png", 0.35f,
                     "Assets/Textures/BarLamp_Normal.png");
+        // Weathered brass for the exterior gooseneck lights. The model ships no
+        // textures, only Maya lamberts, so this is a flat colour.
+        Mat("Mat_Pub_WallLightBody", Rgb(118, 100, 66), 0.34f, 0.55f);
+
         // Painted corrugated steel for the entrance doors, front and back. Same
         // albedo; the back's normal map has its X and Y negated so its ridges
         // read as grooves -- see the door build for why that is not optional.
@@ -2674,6 +2678,55 @@ public static class PubEnvironmentBuilder
     /// unchanged at four -- the spot simply takes the slot the point light used
     /// to hold.
     /// </summary>
+    /// <summary>
+    /// One gooseneck fixture on an exterior wall, plus the light it casts.
+    ///
+    /// <paramref name="outward"/> is the wall's outward normal, which sets both
+    /// the yaw and the direction the arm reaches. Asset_WallLight is modelled
+    /// with its plate on the origin and its arm along +Z, so yaw comes straight
+    /// from that vector and the fixture mounts flush to any wall.
+    ///
+    /// The light sits at the SHADE, not at the mount: the arm carries the head
+    /// 0.28 m out from the wall and 0.13 m down, and a light left at the plate
+    /// would pour out of the brickwork behind the fixture.
+    /// </summary>
+    static void WallLight(Transform parent, string name, Vector3 mount, Vector3 outward)
+    {
+        // +180 because Unity's FBX axis conversion lands the model's +Y arm on
+        // world -Z, not +Z. Verified by measurement rather than derivation: at
+        // yaw = atan2 alone the fixtures sat INSIDE the brickwork (bounds centre
+        // 6.07 through a wall spanning 6.00..6.25); with +180 they stand clear
+        // at 6.43. This is separate from the plate-end bug in walllight.py --
+        // that one put the wall plate out in the air, and fixing it did not
+        // remove the need for this.
+        float yaw = Mathf.Atan2(outward.x, outward.z) * Mathf.Rad2Deg + 180f;
+        Model("Asset_WallLight", parent, mount, yaw, M("Mat_Pub_WallLightBody"),
+              slotMaterials: new[] { M("Mat_Pub_WallLightBody"), M("Mat_Pub_Bulb") });
+
+        // NOT Downlight(). That helper is for the interior key lights and sets
+        // renderMode = ForcePixel, which bypasses the pixelLightCount budget and
+        // adds a full render pass per affected renderer -- and it also spawns a
+        // second "wash" point light. Five fixtures built that way put TEN forced
+        // pixel lights outside and took the hall from 97% of frames on budget to
+        // 55%, measured. These are decorative wall washes; they get one ordinary
+        // spot each, left to Unity's own importance sorting.
+        Vector3 head = mount + outward.normalized * 0.28f + Vector3.down * 0.13f;
+        GameObject lgo = new GameObject(name + "_Light");
+        lgo.transform.SetParent(parent, false);
+        lgo.transform.localPosition = head;
+        lgo.transform.localEulerAngles = new Vector3(78f, yaw, 0f);
+        Light wl = lgo.AddComponent<Light>();
+        wl.type = LightType.Spot;
+        wl.color = new Color(1f, 0.93f, 0.80f);
+        wl.intensity = 2.4f;
+        wl.range = 5.0f;
+        wl.spotAngle = 120f;
+        wl.innerSpotAngle = 55f;
+        wl.shadows = LightShadows.None;
+        wl.renderMode = LightRenderMode.Auto;
+        _objectCount++;
+    }
+
     static void Downlight(Transform parent, string name, Vector3 pos, Color color,
                           float intensity, float range, bool castShadows)
     {
@@ -3052,6 +3105,28 @@ public static class PubEnvironmentBuilder
         Tile(road, new Vector2(roadW / RoadTileMetres, roadD / RoadTileMetres));
         Box("StreetGround", ground, new Vector3(0f, -0.05f, fZ - 5f),
             new Vector3(roadW, 0.06f, roadD), road, true);
+
+        // ---- Exterior wall lights ----
+        //
+        // One over the entrance and one at each end of both side walls. The
+        // building's outside was lit only by an overhead sun, which grazes a
+        // vertical wall and leaves it reading as a flat dark slab -- these give
+        // the brickwork something to catch.
+        Transform extLights = Group(g, "ExteriorLights");
+        float wt = WallThickness;
+        const float mountY = 2.95f;          // clear of the 2.6 m entrance head
+        float endZ = HalfD - 2.5f;
+
+        WallLight(extLights, "ExtLight_Entrance",
+                  new Vector3(0f, mountY, -HalfD - wt), Vector3.back);
+        WallLight(extLights, "ExtLight_L_Front",
+                  new Vector3(-HalfW - wt, mountY, -endZ), Vector3.left);
+        WallLight(extLights, "ExtLight_L_Back",
+                  new Vector3(-HalfW - wt, mountY, endZ), Vector3.left);
+        WallLight(extLights, "ExtLight_R_Front",
+                  new Vector3(HalfW + wt, mountY, -endZ), Vector3.right);
+        WallLight(extLights, "ExtLight_R_Back",
+                  new Vector3(HalfW + wt, mountY, endZ), Vector3.right);
 
         // ---- Compound walls ----
         Transform walls = Group(g, "CompoundWalls");

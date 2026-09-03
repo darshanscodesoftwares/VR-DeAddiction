@@ -265,3 +265,28 @@ lamp wrong.
 
 Unused: Metallic and Roughness maps.
 
+## Exterior wall lights
+
+- File: `Assets/Models/Asset_WallLight.fbx`
+- Source: **"alton wall light"** (`~/Downloads/source 3`), 1,444 triangles
+- **Licence not recorded — confirm before release.** No licence file supplied.
+
+Derived by `BlenderAssets/scripts/walllight.py`. No textures ship with it, only
+Maya lamberts, so the body is a flat weathered brass and the emitter strip is
+kept as a separate MATERIAL SLOT driven by the emissive bulb material — so the
+fixture reads as switched on rather than painted.
+
+Two corrections were needed before it could be placed by coordinate:
+
+- Its meshes hang off an `alton_light` EMPTY carrying Maya's 0.01 centimetre
+  scale, and `transform_apply` on a CHILD does not include its parent's
+  transform. Applied without unparenting first it exports 100x oversized — a
+  39 metre light fitting.
+- Its origin is a bounding-box CORNER, not the mounting point. The script moves
+  it to the centroid of the wall plate (every vertex within 5 mm of minimum Y),
+  so a fixture placed AT a wall surface point mounts flush to it.
+
+Placed five times: over the entrance and at both ends of each side wall. The
+light is put at the SHADE, 0.28 m out from the wall and 0.13 m down, not at the
+plate — a light left at the mount would pour out of the brickwork behind it.
+
