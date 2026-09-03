@@ -58,3 +58,7 @@ BlenderAssets/renders/
 
 # Unity crash-recovery copies -- derived junk, not source
 /[Aa]ssets/_Recovery/
+
+# Headless build/audit logs written into the project root by the Unity CLI.
+# Regenerated on every run; never worth versioning.
+*.log

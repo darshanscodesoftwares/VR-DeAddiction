@@ -81,3 +81,136 @@ Derived: the source is a 4-bit PALETTE-INDEXED image -- 16 colours faking a
 gradient with ordered dithering, which in a headset reads as a sky made of dots.
 De-dithered by a wrapped Gaussian blur (a dither pattern's local mean IS the
 colour it approximates), contrast restored, saved as 8-bit RGB.
+
+## Hall floor
+
+- Files: `Assets/Textures/Floor_Concrete.png`, `Floor_Concrete_Normal.png`
+- Source: **ambientCG "Concrete 034"** — https://ambientcg.com/a/Concrete034
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+Derived: the 2K Color and NormalGL maps at 1024, tiled every 2 m across the
+12.4 x 20.4 m slab.
+
+## Cardboard cartons
+
+- Files: `Assets/Models/Asset_CardboardBox.fbx`,
+  `Assets/Textures/CardboardBox.png`, `CardboardBox_Normal.png`
+- Source: **"Low Poly Cardboard Box"**, downloaded as `lowpoly-cardboard-box`
+  (44 triangles, 24 verts, one UV map)
+- **Licence not recorded — confirm before release.** The download contained no
+  licence file.
+
+Derived by `BlenderAssets/scripts/cardboardbox.py` from
+`BlenderAssets/source/CardboardBox.fbx`: scaled uniformly from the 2 m cube it
+ships as down to 0.55 m, and the base re-seated on z = 0.
+
+Uniform scale on purpose. The cases these replace were 0.66 x 0.36 x 0.66, and
+squashing the model to that would have stretched the printed cardboard texture
+and folded the flap geometry flat.
+
+The source's `Box_Height.png` is not used — the Built-in Standard shader's
+parallax needs a height map packed differently, and at 0.55 m across a carton
+gains nothing from it.
+
+## Drinks shelf
+
+- Files: `Assets/Models/Asset_DrinksShelf.fbx`,
+  `Assets/Textures/DrinksShelf.jpg`, `DrinksShelf_Normal.jpg`
+- Source: **"Supermarket Drinks Shelf"**, downloaded as
+  `supermarket-drinks-shelf-asset` (105,652 triangles as published)
+- **Licence not recorded — confirm before release.** No licence file in the
+  download.
+
+Derived by `BlenderAssets/scripts/drinksshelf.py` from
+`BlenderAssets/source/DrinksShelf.fbx`: collapse-decimated 105,652 -> 16,000
+triangles, re-origined centred in width and depth with its base on z = 0.
+
+Decimated to 3,893 first, which was too far: the bottles are small and densely
+packed, so they are the first thing collapse decimation eats, and every one
+collapsed into a triangular smear. 16,000 keeps the stock readable and was
+affordable once the scene was holding a locked 72 fps.
+
+Its stocked face is Blender -Y, which the FBX axis conversion delivers as Unity
++Z -- so against the back wall it needs **yaw 180**, not 0. Placed the other way
+the back panel faces the room.
+
+Its Metallic and Roughness maps are unused — the Built-in Standard shader wants
+them packed into one metallic-smoothness texture, and two more 1024 maps on a
+back-wall prop is not worth it. Colour and normal only.
+
+**Contains real, legible alcohol brand labels** (the scan is of a real
+supermarket chiller). Every other drink surface in this project is deliberately
+unbranded — see the "generic red - no branding reproduced" note on the coolers in
+`PubEnvironmentBuilder.cs`.
+
+**Decided on 3 Sep 2026: keep the branding, unaltered.** Asked directly, the
+project owner chose to ship the labels as scanned rather than blur or repaint the
+atlas. This is a deliberate exception to the no-branding rule and applies to this
+asset only — the coolers, bottles and signage stay generic. Revisit it alongside
+the outstanding licence question, since reproducing trade dress and reusing the
+scan are separate permissions.
+
+## Counter timber
+
+- Files: `Assets/Textures/Counter_Wood.png`, `Counter_Wood_Normal.png`
+- Source: **ambientCG "Wood 027"** — https://ambientcg.com/a/Wood027
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+Derived: the 2K Color and **NormalGL** maps (not NormalDX — Unity wants the
+OpenGL convention), tiled 4x along the counter's 6.6 m length so a plank reads
+at about 1.7 m. At 1:1 a 2K sheet stretches its grain over the whole span and
+looks like a photograph of wood rather than boards.
+
+Applied to every part of the counter — kick, base, top slab, chamfer lip,
+drinking ledge, and the return wing with its own kick. The teal ledge brackets
+stay metal. The counter was cast concrete before this.
+
+Unused: Displacement and Roughness. The Built-in Standard shader wants roughness
+packed into a metallic-smoothness map, and parallax on a counter edge is not
+worth a third 1024 texture on a Quest.
+
+## Building walls
+
+- Files: `Assets/Textures/Brick_Wall.png`, `Brick_Wall_Normal.png`
+- Source: **ambientCG "Bricks 090"** — https://ambientcg.com/a/Bricks090
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+Derived: the 2K Color and NormalGL maps, applied to every wall of the building
+inside and out — both side walls, the back wall, both front segments, the
+entrance lintel and the piers. The side walls were whitewashed brick and the
+back and front were pink plaster; both are now this brick.
+
+NOT brick, deliberately: the door leaves and frames, the dado band, and the
+entrance jambs.
+
+Tiled at **2 m per repeat via `BrickWall(width, height)`**, which builds one
+material per distinct wall size. Unity's cube UVs run 0-1 per FACE, so a single
+tiling value would print bricks five times larger on the 20 m side wall than on
+the 4 m lintel and the building would stop reading as masonry. Sizes of 1.5
+repeats or more are rounded to whole numbers so the pattern wraps seamlessly;
+anything smaller keeps its exact fraction, because forcing a 0.5 m pier up to one
+whole repeat is a worse error than a seam nobody can see on a 0.5 m strip.
+
+## Street
+
+- Files: `Assets/Textures/Road.png`, `Road_Normal.png`
+- Source: **ambientCG "Road 008 C"** — https://ambientcg.com/a/Road008C
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+Derived: the 2K Color and NormalGL maps, **rotated 90 degrees**, tiled at 4 m per
+repeat from the street's real dimensions (8.125 x 2.5 over 32.5 x 10 m).
+
+The rotation is the whole story. The texture's yellow lane markings run up its V
+axis, and a Unity cube's top face maps V to Z -- the road's 10 m depth -- so
+applied as shipped the markings lay ACROSS the carriageway like a pedestrian
+crossing instead of along it.
+
+**The normal map could not simply be rotated with it.** Turning a tangent-space
+normal map rotates the surface but not the vectors stored in it, so its R and G
+channels were remapped (R' = 1 - G, G' = R) to match the 90 degree turn. Without
+that every bump is lit from the wrong side -- a mistake that looks fine when you
+open the file and is wrong only once it is in the scene.
+
+Both were processed in Blender with the colorspace forced to Non-Color on read
+and write, so values round-trip untouched; left as sRGB the transform is applied
+twice and the asphalt comes back washed out.

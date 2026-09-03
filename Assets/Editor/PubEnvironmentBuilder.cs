@@ -38,6 +38,20 @@ public static class PubEnvironmentBuilder
     const int TableRows = 4;
     const int ChairsPerTable = 2;
 
+    /// <summary>
+    /// Chance that any given table chair actually gets placed.
+    ///
+    /// Two chairs at every table reads as a laid-out dining room. A bar does
+    /// not look like that -- chairs get taken to other tables and never come
+    /// back, so some tables have two, some one, some none. Dropping them at
+    /// random is what produces that unevenness; it also thins a room that had
+    /// grown crowded once the chairs became full-size plastic ones with arms.
+    ///
+    /// Only the GRID chairs are subject to this. The seated scenario places its
+    /// own chair, which must always exist.
+    /// </summary>
+    const float ChairKeepChance = 0.62f;
+
     const int Seed = 20260814;        // fixed so rebuilds are identical
 
     // Compound / exterior yard
@@ -70,6 +84,18 @@ public static class PubEnvironmentBuilder
     static System.Random _rng;
     static Dictionary<string, Material> _mats;
     static List<Vector3> _tableTops;   // so clutter lands on tables, not mid-air
+
+    /// <summary>
+    /// Where the visible lamps hang. BuildFixtures fills this and BuildLighting
+    /// reads it, so a light is always AT a lamp.
+    ///
+    /// They used to be laid out independently: fixtures every 4.3 m, pixel
+    /// lights every 6.2 m, vertex fill every 4.6 m. Three sets of positions
+    /// that never coincided -- so the lamps you could see emitted nothing and
+    /// the shadows came from empty air between them.
+    /// </summary>
+    static List<Vector3> _pendantBulbs;
+    static List<Vector3> _bareBulbs;
     static int _objectCount;
     static int _triangleCount;
 
@@ -88,6 +114,8 @@ public static class PubEnvironmentBuilder
         _rng = new System.Random(Seed);
         _mats = new Dictionary<string, Material>();
         _tableTops = new List<Vector3>();
+        _pendantBulbs = new List<Vector3>();
+        _bareBulbs = new List<Vector3>();
         _objectCount = 0;
         _triangleCount = 0;
         _grabbableCount = 0;
@@ -244,7 +272,12 @@ public static class PubEnvironmentBuilder
             AssetDatabase.CreateFolder("Assets/PubEnvironment", "Materials");
 
         // Shell ---------------------------------------------------------------
-        Mat("Mat_Pub_ConcreteFloor", Rgb(102, 99, 94), 0.14f, 0f);
+        // ambientCG Concrete034 (CC0), colour plus normal. The hall floor is the
+        // surface a patient looks at most -- you walk on it the whole session --
+        // and it was a single flat grey. Tiling is set where the floor is built,
+        // from its real size.
+        MatTextured("Mat_Pub_ConcreteFloor", "Assets/Textures/Floor_Concrete.png", 0.10f,
+                    normalPath: "Assets/Textures/Floor_Concrete_Normal.png");
         Mat("Mat_Pub_PlasterPink", Rgb(214, 176, 168), 0.06f, 0f);
         Mat("Mat_Pub_PlasterWhite", Rgb(222, 216, 204), 0.06f, 0f);
         Mat("Mat_Pub_BrickWhitewash", Rgb(198, 172, 164), 0.05f, 0f);
@@ -294,7 +327,32 @@ public static class PubEnvironmentBuilder
         MatTextured("Mat_WG_Whiskey", "Assets/Textures/WG_Whiskey_BaseColor.png", 0.80f,
                     "Assets/Textures/WG_Whiskey_Normal.png");
 
+        // Stand-up button icon. Emissive, because the seated scenario deliberately
+        // dims the room and an unlit control would disappear into it.
+        MatTextured("Mat_Pub_ExitIcon", "Assets/Textures/ExitIcon.jpg", 0.35f);
+        Material exitIcon = M("Mat_Pub_ExitIcon");
+        if (exitIcon != null)
+        {
+            exitIcon.EnableKeyword("_EMISSION");
+            exitIcon.SetColor("_EmissionColor", new Color(0.55f, 0.10f, 0.16f));
+            exitIcon.globalIlluminationFlags =
+                MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            EditorUtility.SetDirty(exitIcon);
+        }
+
         // Clutter -------------------------------------------------------------
+        MatTextured("Mat_Pub_DrinksShelf", "Assets/Textures/DrinksShelf.jpg", 0.30f,
+                    "Assets/Textures/DrinksShelf_Normal.jpg");
+        // Counter timber. Tiled 4x along its length: the counter runs 6.6 m, and
+        // at 1:1 a 2K wood sheet stretches its grain across the whole span and
+        // reads as a photograph of wood rather than as boards. Four repeats put
+        // a plank at ~1.7 m, which is a believable length.
+        MatTextured("Mat_Pub_CounterWood", "Assets/Textures/Counter_Wood.png", 0.30f,
+                    "Assets/Textures/Counter_Wood_Normal.png",
+                    tiling: new Vector2(4f, 1f));
+        // Cardboard is matte -- any sheen on it reads as plastic wrapping.
+        MatTextured("Mat_Pub_CardboardBox", "Assets/Textures/CardboardBox.png", 0.05f,
+                    "Assets/Textures/CardboardBox_Normal.png");
         Mat("Mat_Pub_WaterCase", Rgb(178, 206, 214), 0.62f, 0f);
         Mat("Mat_Pub_CrateGreen", Rgb(46, 132, 84), 0.50f, 0f);
         Mat("Mat_Pub_FanBlade", Rgb(72, 56, 44), 0.28f, 0f);
@@ -350,9 +408,24 @@ public static class PubEnvironmentBuilder
                     normalPath: "Assets/Textures/Ground_Dirt_Normal.png");
         Mat("Mat_Pub_CompoundWall",   Rgb(202, 190, 162), 0.06f, 0f);
         Mat("Mat_Pub_GateWood",       Rgb(168, 128, 68),  0.18f, 0f);
-        Mat("Mat_Pub_SignboardGreen", Rgb(26, 78, 44),    0.15f, 0f);
+        // PAINTED PANELS, not a light box.
+        //
+        // These were emissive, and an emissive surface renders at full
+        // brightness no matter what light reaches it -- so the board glowed
+        // evenly on its own and the two lamps above it had nothing left to do.
+        // The flicker was there and simply could not be seen against it.
+        //
+        // Plain materials mean the board is only as bright as the lamps make
+        // it, which is what lets one failing tube actually show.
+        Mat("Mat_Pub_SignboardGreen", Rgb(16, 122, 108), 0.35f, 0f);
+        Mat("Mat_Pub_SignboardLight", Rgb(40, 186, 162), 0.30f, 0f);
+        Mat("Mat_Pub_SignboardText", Rgb(246, 252, 250), 0.25f, 0f);
+        Mat("Mat_Pub_SignWire", Rgb(28, 26, 24), 0.30f, 0.20f);
         Mat("Mat_Pub_ConcretePole",   Rgb(172, 168, 160), 0.10f, 0f);
         Mat("Mat_Pub_StreetGrey",     Rgb(92, 88, 84),    0.10f, 0f);
+        // Asphalt: low smoothness, but not zero -- a road is not chalk.
+        MatTextured("Mat_Pub_Road", "Assets/Textures/Road.png", 0.18f,
+                    "Assets/Textures/Road_Normal.png");
 
         AssetDatabase.SaveAssets();
     }
@@ -375,6 +448,22 @@ public static class PubEnvironmentBuilder
         m.SetColor("_Color", color);
         m.SetFloat("_Glossiness", smoothness);
         m.SetFloat("_Metallic", metallic);
+
+        // CLEAR EMISSION EXPLICITLY.
+        //
+        // These are .mat ASSETS on disk, loaded and reused between builds -- not
+        // fresh objects. A material that was emissive in an earlier run stays
+        // emissive for ever unless something turns it off, because setting a
+        // colour says nothing about emission.
+        //
+        // That is exactly how the signboard kept glowing after being changed
+        // from MatEmissive to Mat: the source said "painted panel" and the
+        // asset on disk still said "light box". MatEmissive re-enables this
+        // immediately afterwards, so nothing that should glow is affected.
+        m.SetColor("_EmissionColor", Color.black);
+        m.DisableKeyword("_EMISSION");
+        m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
+
         m.enableInstancing = true;
         EditorUtility.SetDirty(m);
         _mats[name] = m;
@@ -523,6 +612,14 @@ public static class PubEnvironmentBuilder
 
         var scen = origin.gameObject.AddComponent<SeatedTableScenario>();
         scen.Lighting = director;
+
+        // The stand-up button's look. Supplied by the builder rather than built
+        // at runtime, so the icon is a real asset with a texture instead of a
+        // coloured primitive.
+        scen.ButtonPrefab = ModelSource("Asset_ExitIcon");
+        scen.ButtonMaterial = M("Mat_Pub_ExitIcon");
+        if (scen.ButtonPrefab == null)
+            Debug.LogWarning("[PubEnvironment] Exit icon mesh missing; button stays a cube.");
         scen.Marker = scenario.transform.Find("Marker");
         scen.SeatAnchor = scenario.transform.Find("SeatAnchor");
 
@@ -587,6 +684,54 @@ public static class PubEnvironmentBuilder
     /// A Standard material carrying a real texture. Used only for the branded
     /// bottle: see the note where these are declared.
     /// </summary>
+    /// <summary>
+    /// Sets a material's tiling on BOTH its albedo and its normal map.
+    ///
+    /// mainTextureScale only touches _MainTex. Setting it alone leaves the
+    /// normal map at 1:1, so the surface relief stops corresponding to the
+    /// colour -- which is what the hall floor shipped with: albedo repeating
+    /// 6.25 x 10.25 over the slab and its bumps stretched once across the whole
+    /// 12 x 20 m. Every tiling change goes through here.
+    /// </summary>
+    static void Tile(Material m, Vector2 scale)
+    {
+        if (m == null)
+            return;
+        m.mainTextureScale = scale;
+        if (m.HasProperty("_BumpMap") && m.GetTexture("_BumpMap") != null)
+            m.SetTextureScale("_BumpMap", scale);
+        EditorUtility.SetDirty(m);
+    }
+
+    /// <summary>
+    /// A brick material tiled to suit ONE wall's real size.
+    ///
+    /// Unity's cube UVs run 0-1 per FACE, so a single tiling value gives a
+    /// 20 m side wall and a 4 m lintel completely different brick sizes -- the
+    /// bricks stop being a unit of measurement and the building stops reading as
+    /// masonry. Each distinct wall size therefore gets its own material, tiled
+    /// to WHOLE repeats so the pattern wraps without a seam. There are only a
+    /// few distinct sizes, so this is a handful of materials, not one per wall.
+    /// </summary>
+    const float BrickTileMetres = 2.0f;
+
+    static Material BrickWall(float widthM, float heightM)
+    {
+        // Round to whole repeats where there is more than one, so the pattern
+        // wraps without a visible seam. Below that, keep the exact fraction:
+        // forcing a 0.5 m pier up to one whole repeat would print bricks four
+        // times the size of the wall it stands against, which is worse than any
+        // seam -- and on something that narrow there is no seam to see anyway.
+        float fx = widthM / BrickTileMetres;
+        float fy = heightM / BrickTileMetres;
+        float tx = fx >= 1.5f ? Mathf.Round(fx) : fx;
+        float ty = fy >= 1.5f ? Mathf.Round(fy) : fy;
+        return MatTextured($"Mat_Pub_BrickWall_{tx:0.00}x{ty:0.00}",
+                           "Assets/Textures/Brick_Wall.png", 0.06f,
+                           "Assets/Textures/Brick_Wall_Normal.png",
+                           tiling: new Vector2(tx, ty));
+    }
+
     static Material MatTextured(string name, string texturePath, float smoothness,
                                 string normalPath = null, Color? tint = null,
                                 bool transparent = false, Vector2? tiling = null)
@@ -631,7 +776,7 @@ public static class PubEnvironmentBuilder
         }
 
         if (tiling.HasValue)
-            m.mainTextureScale = tiling.Value;
+            Tile(m, tiling.Value);
 
         m.enableInstancing = true;
         EditorUtility.SetDirty(m);
@@ -825,17 +970,32 @@ public static class PubEnvironmentBuilder
         Box("Floor", g, new Vector3(0f, -0.1f, 0f),
             new Vector3(outerW, 0.2f, outerD), floorMat, true);
 
-        // Side walls (+/-X), whitewashed brick like reference 3.
+        // 2 m per repeat. Concrete has no obvious features to give the repeat
+        // away, so it can tile tighter than the yard's dirt -- and a tighter
+        // repeat keeps the grain readable underfoot instead of smearing across
+        // a 12 x 20 m slab.
+        if (floorMat != null)
+        {
+            const float FloorTileMetres = 2f;
+            Tile(floorMat,
+                 new Vector2(outerW / FloorTileMetres, outerD / FloorTileMetres));
+        }
+
+        // Every wall of the building is the same brick, inside and out. Each
+        // one is tiled to its own dimensions so a brick is the same size on the
+        // 20 m side wall as on the 4 m lintel. Doors, dado band and jambs are
+        // deliberately NOT brick.
+        // Side walls (+/-X).
         Box("Wall_Right", g, new Vector3(HalfW + t * 0.5f, wallH * 0.5f, 0f),
-            new Vector3(t, wallH, outerD), brick, true);
+            new Vector3(t, wallH, outerD), BrickWall(outerD, wallH), true);
         Box("Wall_Left", g, new Vector3(-HalfW - t * 0.5f, wallH * 0.5f, 0f),
-            new Vector3(t, wallH, outerD), brick, true);
+            new Vector3(t, wallH, outerD), BrickWall(outerD, wallH), true);
 
         // Back wall (+Z) - solid, no doorway.
         float backZ = HalfD + t * 0.5f;
         Box("Wall_Back", g,
             new Vector3(0f, wallH * 0.5f, backZ),
-            new Vector3(outerW, wallH, t), plaster, true);
+            new Vector3(outerW, wallH, t), BrickWall(outerW, wallH), true);
 
         // Front wall (-Z) with the wide open entrance.
         float entW = 4.2f, entH = 2.6f;
@@ -843,13 +1003,13 @@ public static class PubEnvironmentBuilder
         float fSegW = (HalfW + t) - entW * 0.5f;
         Box("Wall_Front_Left", g,
             new Vector3(-entW * 0.5f - fSegW * 0.5f, wallH * 0.5f, frontZ),
-            new Vector3(fSegW, wallH, t), plaster, true);
+            new Vector3(fSegW, wallH, t), BrickWall(fSegW, wallH), true);
         Box("Wall_Front_Right", g,
             new Vector3(entW * 0.5f + fSegW * 0.5f, wallH * 0.5f, frontZ),
-            new Vector3(fSegW, wallH, t), plaster, true);
+            new Vector3(fSegW, wallH, t), BrickWall(fSegW, wallH), true);
         Box("Wall_Front_Lintel", g,
             new Vector3(0f, entH + (wallH - entH) * 0.5f, frontZ),
-            new Vector3(entW, wallH - entH, t), plaster, true);
+            new Vector3(entW, wallH - entH, t), BrickWall(entW, wallH - entH), true);
 
         // Entrance reveal, so the opening reads as thick masonry.
         Box("Entrance_Jamb_L", g, new Vector3(-entW * 0.5f, entH * 0.5f, frontZ),
@@ -909,9 +1069,9 @@ public static class PubEnvironmentBuilder
         {
             float z = -HalfD + 1.8f + i * 3.3f;
             Box("Pier_L_" + i, g, new Vector3(-HalfW + 0.06f, wallH * 0.5f, z),
-                new Vector3(0.12f, wallH, 0.5f), brick);
+                new Vector3(0.12f, wallH, 0.5f), BrickWall(0.5f, wallH));
             Box("Pier_R_" + i, g, new Vector3(HalfW - 0.06f, wallH * 0.5f, z),
-                new Vector3(0.12f, wallH, 0.5f), brick);
+                new Vector3(0.12f, wallH, 0.5f), BrickWall(0.5f, wallH));
         }
 
         // High ventilation windows with metal grilles.
@@ -1074,6 +1234,7 @@ public static class PubEnvironmentBuilder
     static void BuildServiceArea(Transform g)
     {
         Material concrete = M("Mat_Pub_ConcreteTable");
+        Material counterWood = M("Mat_Pub_CounterWood");
         Material teal = M("Mat_Pub_GrilleTeal");
         Material wood = M("Mat_Pub_DarkWood");
         Material cooler = M("Mat_Pub_CoolerRed");
@@ -1086,24 +1247,28 @@ public static class PubEnvironmentBuilder
         const float CounterH = 1.05f;   // working height
         const float TopY = CounterH + 0.045f;
 
+        // The counter is timber now, not cast concrete. Every piece of it --
+        // kick, base, top slab, chamfer lip, drinking ledge and the return wing
+        // with its own kick -- takes the same material, so the whole unit reads
+        // as one built object. The teal ledge brackets stay metal.
         // ---- Counter body ---------------------------------------------------
-        // Cast concrete, with a recessed kick at the floor and an overhanging
+        // Cast counterWood, with a recessed kick at the floor and an overhanging
         // top slab. The recess is what stops it reading as a plain block: real
         // counters are stood at, so your feet go under the front edge.
         Box("Counter_Kick", g, new Vector3(cx, 0.075f, cz + 0.06f),
-            new Vector3(cw - 0.10f, 0.15f, 0.72f), concrete, true);
+            new Vector3(cw - 0.10f, 0.15f, 0.72f), counterWood, true);
         Box("Counter_Base", g, new Vector3(cx, 0.60f, cz),
-            new Vector3(cw, 0.90f, 0.85f), concrete, true);
+            new Vector3(cw, 0.90f, 0.85f), counterWood, true);
 
         // Top slab plus a chamfer strip, so the edge catches the counter light.
         Box("Counter_Top", g, new Vector3(cx, TopY, cz - 0.05f),
-            new Vector3(cw + 0.26f, 0.09f, 1.02f), concrete, true);
+            new Vector3(cw + 0.26f, 0.09f, 1.02f), counterWood, true);
         Box("Counter_TopLip", g, new Vector3(cx, TopY - 0.062f, cz - 0.05f),
-            new Vector3(cw + 0.20f, 0.035f, 0.96f), concrete);
+            new Vector3(cw + 0.20f, 0.035f, 0.96f), counterWood);
 
         // Customer-side drinking ledge: where glasses actually get put down.
         Box("Counter_Ledge", g, new Vector3(cx, 0.98f, cz - 0.62f),
-            new Vector3(cw + 0.10f, 0.05f, 0.26f), concrete, true);
+            new Vector3(cw + 0.10f, 0.05f, 0.26f), counterWood, true);
         for (int i = 0; i < 4; i++)
         {
             Box("Counter_LedgeBracket_" + i, g,
@@ -1112,10 +1277,19 @@ public static class PubEnvironmentBuilder
         }
 
         // Return wing at the left end.
+        //
+        // The wing sits at y 0.15 .. 1.05, the same recess as the main counter,
+        // but the main counter has Counter_Kick filling that 0.15 m and this had
+        // nothing -- so the whole wing hung in the air with daylight under it.
+        // Its kick runs back to z -0.30 to meet the main counter's, and is inset
+        // 0.05 on each exposed side so the recess reads the same as the rest.
+        Box("Counter_ReturnKick", g,
+            new Vector3(cx - cw * 0.5f + 0.42f, 0.075f, cz - 1.225f),
+            new Vector3(0.75f, 0.15f, 1.85f), counterWood, true);
         Box("Counter_Return", g, new Vector3(cx - cw * 0.5f + 0.42f, 0.60f, cz - 1.3f),
-            new Vector3(0.85f, 0.90f, 1.8f), concrete, true);
+            new Vector3(0.85f, 0.90f, 1.8f), counterWood, true);
         Box("Counter_ReturnTop", g, new Vector3(cx - cw * 0.5f + 0.42f, TopY, cz - 1.3f),
-            new Vector3(0.95f, 0.09f, 1.9f), concrete, true);
+            new Vector3(0.95f, 0.09f, 1.9f), counterWood, true);
 
         // ---- Security cage ----------------------------------------------------
         // The defining feature of a TASMAC counter: heavy mesh from the counter
@@ -1223,15 +1397,64 @@ public static class PubEnvironmentBuilder
         }
 
         // Beverage coolers, generic red - no branding reproduced.
+        //
+        // Only the right-hand one is a built cooler now; the left was replaced
+        // by Asset_DrinksShelf, a scanned supermarket drinks shelf.
         Transform cool = Group(g, "Coolers");
-        for (int i = 0; i < 2; i++)
         {
-            float bx = 4.3f + i * 1.15f;
+            float bx = 5.45f;
             float bz = HalfD - 0.62f;
-            Box("Cooler_" + i + "_Body", cool, new Vector3(bx, 0.72f, bz), new Vector3(1.05f, 1.45f, 0.65f), cooler, true);
-            Box("Cooler_" + i + "_Header", cool, new Vector3(bx, 1.56f, bz), new Vector3(1.05f, 0.24f, 0.65f), cooler);
-            Prim(PrimitiveType.Cube, "Cooler_" + i + "_Glass", cool,
+            Box("Cooler_1_Body", cool, new Vector3(bx, 0.72f, bz), new Vector3(1.05f, 1.45f, 0.65f), cooler, true);
+            Box("Cooler_1_Header", cool, new Vector3(bx, 1.56f, bz), new Vector3(1.05f, 0.24f, 0.65f), cooler);
+            Prim(PrimitiveType.Cube, "Cooler_1_Glass", cool,
                  new Vector3(bx, 0.78f, bz - 0.34f), new Vector3(0.88f, 1.1f, 0.03f), glass, Vector3.zero, false);
+        }
+
+        // Scanned drinks shelf in place of the left cooler.
+        //
+        // It is 1.81 m wide against the cooler's 1.05, so it cannot simply drop
+        // into the same spot -- it would run through the remaining cooler. It
+        // extends LEFT instead: spanning x 3.02 .. 4.83 it clears the cooler's
+        // left face at 4.925 with a 0.10 m gap, and stops well short of
+        // BackShelving, which ends at x 1.6.
+        //
+        // Yaw 180, and the reasoning that said 0 was wrong. The render showed
+        // the stocked face on Blender -Y, which I mapped to Unity -Z. The FBX
+        // axis conversion flips it: Blender -Y arrives as Unity +Z, so the
+        // shelf went in with its back panel to the room.
+        //
+        // It also stands on a plinth. The model's origin is the centre of its
+        // base, so the plinth height is simply the shelf's Y and the two stack
+        // without any fudge factor. Plinth 0.40 + shelf 1.235 = 1.635 overall,
+        // which sits just under the neighbouring cooler's 1.68 and reads as a
+        // deliberate pair rather than a mismatch.
+        {
+            float dsx = 3.92f;
+            float dsz = HalfD - 0.48f;
+            const float plinthH = 0.40f;
+            const float shelfH = 1.235f;
+
+            Box("DrinksShelf_Plinth", cool,
+                new Vector3(dsx, plinthH * 0.5f, dsz),
+                new Vector3(1.90f, plinthH, 0.46f), M("Mat_Pub_ConcreteTable"), true);
+
+            GameObject shelfUnit = Model("Asset_DrinksShelf", cool,
+                                         new Vector3(dsx, plinthH, dsz), 180f,
+                                         M("Mat_Pub_DrinksShelf"));
+            if (shelfUnit != null)
+            {
+                shelfUnit.name = "DrinksShelf";
+                // Scenery, but solid: a shelf you can walk through reads as a
+                // hologram. The primitive coolers get theirs from Box(keepCollider).
+                BoxCollider bc = shelfUnit.AddComponent<BoxCollider>();
+                bc.size = new Vector3(1.81f, shelfH, 0.37f);
+                bc.center = new Vector3(0f, shelfH * 0.5f, 0f);
+            }
+            else
+            {
+                Box("Cooler_0_Body", cool, new Vector3(4.3f, 0.72f, HalfD - 0.62f),
+                    new Vector3(1.05f, 1.45f, 0.65f), cooler, true);
+            }
         }
 
         // (Back doorway removed — solid wall now.)
@@ -1434,6 +1657,24 @@ public static class PubEnvironmentBuilder
 
         MakeGrabbable(group, bc, mass);
 
+        // A small push-out AFTER the grab, which costs no grab freedom at all.
+        // See GrabPushOut.cs -- and the note below for what not to do instead.
+        group.gameObject.AddComponent<GrabPushOut>();
+
+        // NO fixed grip point here.
+        //
+        // A grip transform with dynamic attach off was tried, to stop bottles
+        // intersecting the hand. It made the intersection tidier and broke the
+        // grabbing: snapping every object to one pose fights how you actually
+        // reach for things, and a worse grab is a bad trade for a better
+        // looking one. Dynamic attach stays.
+        //
+        // Doing this properly needs per-object hand POSES, not attach points --
+        // the fingers have to close differently on a tumbler than on a bottle
+        // neck. That is a system this project does not have, and the usual
+        // implementations are vendor-specific, which the OpenXR-only rule rules
+        // out. Left alone deliberately rather than half-solved.
+
         // Glass clink on pickup. Attached HERE and not in MakeGrabbable, so it
         // covers the drinkware and not the chairs -- a chair should not chime.
         group.gameObject.AddComponent<GrabClink>().Clip = _clinkClip;
@@ -1464,24 +1705,31 @@ public static class PubEnvironmentBuilder
         // the back is thin, so nothing solid sits over the table surface.
         GameObject go = group.gameObject;
 
+        // Sized to the plastic monobloc chair: 0.642 wide x 0.628 deep x 0.880
+        // tall, seat at 0.445. It is much WIDER than the chair it replaced
+        // because it has arms -- the old boxes were 0.42 x 0.41 and would have
+        // left the armrests with no collision at all, so a hand would pass
+        // through the most obvious thing to grab.
         BoxCollider legs = go.AddComponent<BoxCollider>();
         legs.center = new Vector3(0f, 0.215f, 0f);
-        legs.size = new Vector3(0.42f, 0.430f, 0.41f);
+        legs.size = new Vector3(0.58f, 0.430f, 0.56f);
 
         // Seat is deliberately thicker than the visible slab: a 55 mm target is
-        // very hard to hit with a tracked hand.
+        // very hard to hit with a tracked hand. Widened to take in the arms.
         BoxCollider seat = go.AddComponent<BoxCollider>();
-        seat.center = new Vector3(0f, 0.445f, 0f);
-        seat.size = new Vector3(0.45f, 0.110f, 0.44f);
+        seat.center = new Vector3(0f, 0.455f, 0.02f);
+        seat.size = new Vector3(0.64f, 0.150f, 0.58f);
 
-        // Back sits at -Z, matching the corrected model. Given some depth so it
-        // can be grabbed from either side, but still thin enough that it never
-        // intrudes over a table top.
+        // Back at -Z. Blender +Y maps to Unity -Z under this project's export
+        // contract, and plasticchair.py checks the backrest really is at +Y
+        // before exporting -- the yaw = -angle placement depends on it.
         BoxCollider back = go.AddComponent<BoxCollider>();
-        back.center = new Vector3(0f, 0.690f, -0.240f);
-        back.size = new Vector3(0.44f, 0.460f, 0.200f);
+        back.center = new Vector3(0f, 0.680f, -0.255f);
+        back.size = new Vector3(0.58f, 0.420f, 0.150f);
 
-        MakeGrabbable(group, seat, 4.5f);
+        // 3.2 kg, not 4.5: this is moulded plastic, and the weight is what a
+        // patient feels when they pick it up and put it down.
+        MakeGrabbable(group, seat, 3.2f);
     }
 
     /// <summary>
@@ -1506,6 +1754,134 @@ public static class PubEnvironmentBuilder
             mc.sharedMesh = mf.sharedMesh;
             mc.convex = false;
         }
+    }
+
+    /// <summary>
+    /// A point on a round table top, at least <paramref name="minGap"/> from
+    /// anything already placed there.
+    ///
+    /// Uniform over the DISC, which needs sqrt: sampling radius linearly would
+    /// crowd everything into the middle, because a ring's area grows with r.
+    ///
+    /// The spacing check matters as much as the radius. Two props spawned
+    /// overlapping are resolved by the physics solver on the first step, and it
+    /// resolves them by shoving one of them off the table.
+    /// </summary>
+    static Vector3 OnTable(List<Vector2> placed, float usableRadius, float minGap)
+    {
+        for (int attempt = 0; attempt < 24; attempt++)
+        {
+            float a = Rand(0f, Mathf.PI * 2f);
+            float r = usableRadius * Mathf.Sqrt(Rand(0f, 1f));
+            Vector2 p = new Vector2(Mathf.Sin(a) * r, Mathf.Cos(a) * r);
+
+            bool clear = true;
+            for (int i = 0; i < placed.Count; i++)
+            {
+                if (Vector2.Distance(placed[i], p) < minGap) { clear = false; break; }
+            }
+            if (!clear && attempt < 23)
+                continue;
+
+            placed.Add(p);
+            return new Vector3(p.x, 0f, p.y);
+        }
+        return Vector3.zero;
+    }
+
+    /// <summary>
+    /// A hanging cable between two points, as a chain of short boxes.
+    ///
+    /// The sag is parabolic: offset = 4 * sag * t * (1 - t), which is zero at
+    /// both ends and deepest in the middle. A real catenary is a cosh curve,
+    /// but over a span this short the two are indistinguishable and this needs
+    /// no solving for a shape parameter.
+    /// </summary>
+    static void SagWire(Transform parent, string name, Vector3 from, Vector3 to,
+                        float sag, Material mat)
+    {
+        const int Segments = 10;
+        const float thickness = 0.022f;
+
+        Transform g = Group(parent, name);
+        Vector3 prev = from;
+
+        for (int i = 1; i <= Segments; i++)
+        {
+            float t = i / (float)Segments;
+            Vector3 p = Vector3.Lerp(from, to, t);
+            p.y -= 4f * sag * t * (1f - t);
+
+            Vector3 mid = (prev + p) * 0.5f;
+            Vector3 d = p - prev;
+
+            GameObject seg = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            seg.name = name + "_" + i;
+            Object.DestroyImmediate(seg.GetComponent<Collider>());
+            seg.transform.SetParent(g, false);
+            seg.transform.localPosition = mid;
+            seg.transform.localRotation = Quaternion.LookRotation(d.normalized);
+            seg.transform.localScale = new Vector3(thickness, thickness, d.magnitude);
+            seg.GetComponent<MeshRenderer>().sharedMaterial = mat;
+            _objectCount++;
+
+            prev = p;
+        }
+    }
+
+    /// <summary>
+    /// Loudness of a clip over time, as one value per 1/hz second.
+    ///
+    /// Measured HERE, at build time, rather than in the player: reading a whole
+    /// clip's samples is far too slow to do on device, and the result never
+    /// changes. The runtime then only has to index an array.
+    ///
+    /// Normalised to its own peak so the flicker uses the full range whatever
+    /// the recording's level, and shaped with a square root because loudness is
+    /// perceived closer to amplitude than to energy -- without it the quieter
+    /// ticks vanish and only the two loudest pops show as light.
+    /// </summary>
+    static float[] BuildEnvelope(AudioClip clip, float hz)
+    {
+        if (clip == null)
+        {
+            Debug.LogWarning("[PubEnvironment] No flicker clip; light stays steady.");
+            return new float[0];
+        }
+
+        float[] samples = new float[clip.samples * clip.channels];
+        if (!clip.GetData(samples, 0))
+        {
+            Debug.LogWarning("[PubEnvironment] Could not read " + clip.name +
+                             "; light stays steady.");
+            return new float[0];
+        }
+
+        int perFrame = Mathf.Max(1, Mathf.RoundToInt(clip.frequency / hz)) * clip.channels;
+        int frames = Mathf.Max(1, samples.Length / perFrame);
+        float[] env = new float[frames];
+
+        float peak = 0f;
+        for (int f = 0; f < frames; f++)
+        {
+            double sum = 0;
+            int start = f * perFrame;
+            int end = Mathf.Min(start + perFrame, samples.Length);
+            for (int i = start; i < end; i++)
+                sum += samples[i] * samples[i];
+
+            float rms = Mathf.Sqrt((float)(sum / Mathf.Max(1, end - start)));
+            env[f] = rms;
+            if (rms > peak) peak = rms;
+        }
+
+        if (peak > 1e-6f)
+            for (int f = 0; f < frames; f++)
+                env[f] = Mathf.Sqrt(Mathf.Clamp01(env[f] / peak));
+
+        Debug.Log($"[PubEnvironment] Flicker envelope: {frames} frames at {hz} Hz " +
+                  $"({clip.length:F2}s), peak rms {peak:F4}.");
+        return env;
     }
 
     static int _grabbableCount;
@@ -1535,6 +1911,28 @@ public static class PubEnvironmentBuilder
                 float x = -usableW * 0.5f + stepX * (c + 0.5f) + Rand(-0.18f, 0.18f);
                 float z = -HalfD + 2.2f + stepZ * (r + 0.5f) + Rand(-0.22f, 0.22f);
 
+                // Skip any grid table that would crowd the hero table.
+                //
+                // The scenario drops its table at a fixed (-2.6, 1.4), which the
+                // grid knows nothing about -- and the grid puts tables 1.39 m
+                // and 1.74 m away. Two tables need about 2.3 m between centres
+                // once you allow for a 0.367 radius and chairs reaching 1.13 m
+                // out, so the hero table was wedged between two neighbours with
+                // the patient's chair stranded in the gap.
+                //
+                // Skipping the whole unit rather than just its chairs also
+                // takes its clutter with it, because clutter is placed from
+                // _tableTops and the entry is never added.
+                float heroGap = Vector2.Distance(new Vector2(x, z),
+                    new Vector2(PubScenarioBuilder.TableX, PubScenarioBuilder.TableZ));
+                if (heroGap < 2.4f)
+                {
+                    Debug.Log($"[PubEnvironment] Grid table at ({x:F2}, {z:F2}) " +
+                              $"skipped: {heroGap:F2} m from the hero table.");
+                    index++;
+                    continue;
+                }
+
                 Transform unit = Group(g, "TableUnit_" + index.ToString("00"));
                 unit.localPosition = new Vector3(x, 0f, z);
                 unit.localEulerAngles = new Vector3(0f, Rand(-8f, 8f), 0f);
@@ -1544,18 +1942,26 @@ public static class PubEnvironmentBuilder
 
                 for (int s = 0; s < ChairsPerTable; s++)
                 {
+                    // Rolled before anything else is computed, so skipping a
+                    // chair costs nothing and the random sequence stays stable.
+                    if (Rand(0f, 1f) > ChairKeepChance)
+                        continue;
+
                     float ang = 90f * s + Rand(-16f, 16f);
-                    // Clearance maths, not taste. The table is now a DISC of
-                    // radius 0.367, not a 1.17 x 0.82 slab, so the old 0.95 m
-                    // spacing left chairs marooned a third of a metre from the
-                    // edge. A chair's leg box is 0.41 deep (half-depth 0.21),
-                    // so 0.367 + 0.21 = 0.577 is the contact distance and
-                    // 0.70-0.78 tucks them in with a hand's width to spare.
+                    // Clearance maths, not taste. The table is a DISC of radius
+                    // 0.367 and the plastic chair is 0.628 DEEP (half-depth
+                    // 0.314) -- nearly half again the 0.41 of the chair it
+                    // replaced, because of the arms. Contact distance is
+                    // therefore 0.367 + 0.314 = 0.681, and the previous
+                    // 0.70-0.78 left as little as 19 mm: close enough that a
+                    // chair's random yaw would have driven it into the table
+                    // and physics would have flung it, exactly as happened
+                    // before with the rectangular tables.
                     //
-                    // Being round, this holds in every direction -- the old
-                    // rectangle needed the worst case (the short side) applied
-                    // all the way round, which is what pushed them out so far.
-                    float dist = Rand(0.70f, 0.78f);
+                    // 0.74-0.82 puts the chair's front edge 60-140 mm off the
+                    // rim, which is where a chair actually sits at a pedestal
+                    // table -- you cannot push one right under.
+                    float dist = Rand(0.74f, 0.82f);
                     float rad = ang * Mathf.Deg2Rad;
                     Vector3 p = new Vector3(Mathf.Sin(rad) * dist, 0f, -Mathf.Cos(rad) * dist);
                     // Yaw must be -ang, not ang+180.
@@ -1589,7 +1995,11 @@ public static class PubEnvironmentBuilder
         stack.localPosition = new Vector3(HalfW - 1.0f, 0f, -HalfD + 1.3f);
         for (int i = 0; i < 4; i++)
         {
-            Chair(stack, "Stacked_" + i, new Vector3(Rand(-0.05f, 0.05f), i * 0.26f, Rand(-0.05f, 0.05f)),
+            // 0.09 m of rise per chair, not 0.26. Monobloc chairs nest into one
+            // another -- that is the point of the shape -- so a real stack gains
+            // less than a hand's width per chair. At 0.26 they stood apart like
+            // a ladder, which is what the pile in the corner looked like.
+            Chair(stack, "Stacked_" + i, new Vector3(Rand(-0.03f, 0.03f), 0.02f + i * 0.09f, Rand(-0.03f, 0.03f)),
                   Rand(-10f, 10f), chairMats[RandInt(0, chairMats.Length)], grabbable: false);
         }
     }
@@ -1674,6 +2084,7 @@ public static class PubEnvironmentBuilder
             Tube("Rod", p, new Vector3(0f, EavesHeight - 0.42f, 0f), 0.035f, 0.85f, metal, Vector3.zero);
             Tube("Shade", p, new Vector3(0f, EavesHeight - 0.95f, 0f), 0.40f, 0.20f, enamel, Vector3.zero);
             Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.06f, 0f), 0.13f, 0.10f, bulb, Vector3.zero);
+            _pendantBulbs.Add(new Vector3(0f, EavesHeight - 1.06f, z));
         }
 
         // Bare bulbs on wire, off to the sides.
@@ -1686,6 +2097,7 @@ public static class PubEnvironmentBuilder
             p.localPosition = new Vector3(x, 0f, z);
             Tube("Wire", p, new Vector3(0f, EavesHeight - 0.55f, 0f), 0.012f, 1.10f, M("Mat_Pub_PosterDark"), Vector3.zero);
             Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.16f, 0f), 0.115f, 0.16f, bulb, Vector3.zero);
+            _bareBulbs.Add(new Vector3(x, EavesHeight - 1.16f, z));
         }
 
         // Tube lights on the walls.
@@ -1824,33 +2236,55 @@ public static class PubEnvironmentBuilder
         Material amber = M("Mat_Pub_GlassAmber");
         Material green = M("Mat_Pub_GlassGreen");
 
-        // Stacked cases of packaged drinking water - the signature TASMAC clutter.
+        // Cardboard cartons of stock against both side walls.
+        //
+        // This used to be 9 columns up to 4 high on the left plus 4 columns of 2
+        // on the right -- as many as 44 flat-shaded cubes forming a wall of
+        // filler that read as scenery geometry rather than as goods. Now four on
+        // the left and three on the right, from a real model.
+        //
+        // Asset_CardboardBox has its origin at the centre of its BASE, so a box
+        // placed at y = 0 rests on the floor and a stacked one sits at exactly
+        // one box height. No half-buried boxes to hand-correct.
         Transform cases = Group(g, "WaterCases");
-        for (int col = 0; col < 9; col++)
+        Material carton = M("Mat_Pub_CardboardBox");
+        const float boxH = 0.55f;
+
+        Vector3[] cartons =
         {
-            int high = RandInt(2, 4);
-            for (int lvl = 0; lvl < high; lvl++)
-            {
-                Box("Case_L_" + col + "_" + lvl, cases,
-                    new Vector3(-HalfW + 0.42f, 0.19f + lvl * 0.38f, HalfD - 2.2f - col * 0.72f),
-                    new Vector3(0.66f, 0.36f, 0.66f), caseMat);
-            }
-        }
-        for (int col = 0; col < 4; col++)
+            new Vector3(-HalfW + 0.42f, 0f,        HalfD - 2.20f),   // left, stacked pair
+            new Vector3(-HalfW + 0.42f, boxH,      HalfD - 2.20f),
+            new Vector3(-HalfW + 0.44f, 0f,        HalfD - 2.86f),   // left, stacked pair
+            new Vector3(-HalfW + 0.44f, boxH,      HalfD - 2.86f),
+            new Vector3(HalfW - 0.45f,  0f,        HalfD - 2.60f),   // right, stacked pair
+            new Vector3(HalfW - 0.45f,  boxH,      HalfD - 2.60f),
+            new Vector3(HalfW - 0.47f,  0f,        HalfD - 3.26f),   // right, single
+        };
+
+        for (int i = 0; i < cartons.Length; i++)
         {
-            for (int lvl = 0; lvl < 2; lvl++)
-            {
-                Box("Case_R_" + col + "_" + lvl, cases,
-                    new Vector3(HalfW - 0.45f, 0.19f + lvl * 0.38f, HalfD - 2.6f - col * 0.72f),
-                    new Vector3(0.66f, 0.36f, 0.66f), caseMat);
-            }
+            // A few degrees of yaw so a stack looks set down rather than placed.
+            GameObject box = Model("Asset_CardboardBox", cases, cartons[i],
+                                   Rand(-7f, 7f), carton);
+            if (box != null)
+                box.name = "Carton_" + i;
+            else
+                Box("Case_" + i, cases, cartons[i] + new Vector3(0f, boxH * 0.5f, 0f),
+                    new Vector3(0.55f, boxH, 0.55f), caseMat);
         }
 
         // Green crates by the counter.
+        //
+        // Clear of COUNTER_RETURN, the counter's left wing, which spans
+        // x -1.405 to -0.555 and z 5.4 to 7.2. The crates used to start at
+        // x = -1.4, so both columns stood inside it -- a crate half sunk into
+        // the counter, which is what that green box wedged in the corner was.
+        // A crate is 0.60 wide, so its right edge must stay left of -1.405:
+        // -2.60 and -1.94 both clear it, and they are still against the wing.
         Transform crates = Group(g, "Crates");
         for (int i = 0; i < 4; i++)
         {
-            Vector3 p = new Vector3(-1.4f + (i % 2) * 0.66f, 0.155f + (i / 2) * 0.31f, HalfD - 3.5f);
+            Vector3 p = new Vector3(-2.60f + (i % 2) * 0.66f, 0.155f + (i / 2) * 0.31f, HalfD - 3.5f);
             Crate(crates, "Crate_" + i, p, crate, Rand(-6f, 6f));
         }
 
@@ -1863,16 +2297,28 @@ public static class PubEnvironmentBuilder
             Vector3 top = _tableTops[i];
             if (_rng.NextDouble() < 0.35) continue;      // leave some tables clear
 
+            // Positions are sampled inside a CIRCLE now.
+            //
+            // They used to come from a +/-0.42 x +/-0.26 rectangle, which fitted
+            // the old 1.10 x 0.76 table. Against a disc of radius 0.367 a corner
+            // sample lands at r = 0.50 -- past the rim, in mid-air -- so on the
+            // first physics step it dropped to the floor. That is why the room
+            // filled with fallen bottles.
+            //
+            // 0.30 m of usable radius leaves room for the widest prop (0.045)
+            // plus a margin before the edge.
+            var placed = new List<Vector2>();
+
             int bottles = RandInt(1, 4);
             for (int j = 0; j < bottles; j++)
             {
-                Vector3 p = top + new Vector3(Rand(-0.42f, 0.42f), 0f, Rand(-0.26f, 0.26f));
+                Vector3 p = top + OnTable(placed, 0.30f, 0.12f);
                 Bottle(loose, "TBottle_" + (b++), p, (j % 2 == 0) ? amber : green, 0.95f, true);
             }
-            int glasses = RandInt(1, 4);
+            int glasses = RandInt(1, 3);
             for (int j = 0; j < glasses; j++)
             {
-                Vector3 p = top + new Vector3(Rand(-0.45f, 0.45f), 0.045f, Rand(-0.28f, 0.28f));
+                Vector3 p = top + OnTable(placed, 0.30f, 0.10f) + Vector3.up * 0.045f;
                 Transform gGroup = Group(loose, "Glass_" + (gl++));
                 gGroup.localPosition = p;
 
@@ -1950,7 +2396,7 @@ public static class PubEnvironmentBuilder
         // is a gentle darkening rather than a silhouette. This was 0.42, which
         // read as a hard cut-out once the quality level stopped forcing hard
         // shadows and the edges actually softened.
-        sun.shadowStrength = 0.24f;
+        sun.shadowStrength = 0.46f;
         // A low-resolution map needs more bias to avoid self-shadow acne, and
         // normal bias rather than depth bias keeps contact points from
         // detaching ("peter-panning") when it is raised.
@@ -1986,28 +2432,65 @@ public static class PubEnvironmentBuilder
         // z = 0.2 against the table at z = 1.4 -- because the seated scenario
         // is the only place a patient studies objects closely enough for
         // contact shadows to matter. The rest of the hall is walked through.
-        for (int i = 0; i < 3; i++)
-        {
-            float z = -HalfD + 4.0f + i * 6.2f;
-            bool overHeroTable = Mathf.Abs(z - PubScenarioBuilder.TableZ) < 3f;
+        // A light AT EVERY VISIBLE PENDANT, positions taken from the fixtures.
+        //
+        // Three of the five are pixel lights that cast shadows; the rest are
+        // vertex fill. Which three is chosen to spread them along the hall
+        // rather than to sit next to each other -- index 0, 2 and 3, so one
+        // covers the entrance end, one the hero table at z = 1.4, and one the
+        // middle of the room.
+        //
+        // Only three cast because pixel lights are the expensive kind and four
+        // shadowed ones cost the framerate outright earlier today. This is the
+        // dial if it needs to come down further.
+        // ONE shadowed pendant, down from three.
+        //
+        // Three plus the sun plus the two sign floods was six realtime shadow
+        // maps, every one re-rendering every caster within shadowDistance each
+        // frame. Quest guidance is one. The framerate did not fall evenly, it
+        // fell WHEN THE ROOM CAME INTO VIEW, which is the signature of paying
+        // per caster per map rather than a flat overhead.
+        //
+        // Index 0 is the pendant over the hero table, kept because that is the
+        // one spot a patient stands still and looks down at a table, where
+        // contact shadows carry the scene. The rest of the hall is walked
+        // through, and vertex fill reads as lit without paying for maps.
+        var shadowed = new HashSet<int> { 0 };
 
-            Downlight(g, "Lamp_Pendant_C" + i, new Vector3(0f, EavesHeight - 1.15f, z),
-                      warmBulb, 2.55f, 7.2f, castShadows: overHeroTable);
+        for (int i = 0; i < _pendantBulbs.Count; i++)
+        {
+            Vector3 at = _pendantBulbs[i];
+            if (shadowed.Contains(i))
+            {
+                Downlight(g, "Lamp_Pendant_C" + i, at, warmBulb, 2.55f, 9.0f,
+                          castShadows: true);
+            }
+            else
+            {
+                PointLight(g, "Lamp_Pendant_F" + i, at, warmBulb, 1.55f, 8.0f);
+            }
         }
 
         // Pixel: the counter, always the brightest point in these bars.
-        // No shadows: it is across the room from the seated table and lights
-        // the busiest cluster of geometry in the scene.
+        //
+        // No shadows here, and this is the deliberate one to give up.
+        //
+        // The counter, its cage, the crates and the shelf stock are the densest
+        // cluster of renderers in the building, so this map cost more than the
+        // other three together -- and it is the corner a patient looks at from
+        // furthest away. Turning it off buys back the frames that the wider
+        // cones and longer shadow distance spent on the seating area, which is
+        // where a patient actually stands.
         Downlight(g, "Lamp_Counter", new Vector3(1.9f, 2.7f, HalfD - 2.0f),
                   new Color(1f, 0.905f, 0.735f), 2.55f, 6.8f, castShadows: false);
 
-        // Vertex fill: extra pendants between the pixel ones, so the light does
-        // not band into stripes along the hall.
-        for (int i = 0; i < 4; i++)
+        // The bare bulbs down each side were pure geometry -- lamps that gave
+        // off nothing. A vertex light at each costs almost nothing and stops
+        // the side aisles reading as unlit.
+        for (int i = 0; i < _bareBulbs.Count; i++)
         {
-            float z = -HalfD + 2.6f + i * 4.6f;
-            PointLight(g, "Lamp_Pendant_F" + i, new Vector3(0f, EavesHeight - 1.2f, z),
-                       warmBulb, 1.45f, 8.0f);
+            PointLight(g, "Lamp_BareBulb_" + i, _bareBulbs[i],
+                       new Color(1f, 0.90f, 0.70f), 1.15f, 5.5f);
         }
 
         // Vertex fill: side rows, so the outer tables and walls are not black.
@@ -2049,7 +2532,7 @@ public static class PubEnvironmentBuilder
     }
 
     /// <summary>How dark an interior shadow gets. Low: these are soft pools.</summary>
-    const float InteriorShadowStrength = 0.34f;
+    const float InteriorShadowStrength = 0.72f;
 
     /// <summary>
     /// A ceiling lamp that CASTS SHADOWS, built as two lights.
@@ -2086,9 +2569,15 @@ public static class PubEnvironmentBuilder
         l.color = color;
         l.intensity = intensity;
         l.range = range;
-        // Wide, so the pool covers a table group rather than a spotlit circle.
-        l.spotAngle = 118f;
-        l.innerSpotAngle = 55f;
+        // 140 degrees, not 118.
+        //
+        // A pendant hangs 2.65 m up, so a 118 degree cone lit a circle of only
+        // 4.4 m radius -- in a hall 12 m wide that left 1.6 m up each side with
+        // no pixel light on it at all, and no pixel light means no shadow. That
+        // is the other half of why some tables had shadows and some did not.
+        // 140 degrees reaches 7.3 m and the three cones overlap properly.
+        l.spotAngle = 140f;
+        l.innerSpotAngle = 70f;
         l.renderMode = LightRenderMode.ForcePixel;
 
         l.shadows = castShadows ? LightShadows.Soft : LightShadows.None;
@@ -2098,9 +2587,14 @@ public static class PubEnvironmentBuilder
             l.shadowBias = 0.04f;
             l.shadowNormalBias = 0.45f;
             l.shadowNearPlane = 0.2f;
-            // A small map is the cheap way to a soft edge: fewer, larger texels
-            // blur under the soft filter AND cost less to render and sample.
-            l.shadowCustomResolution = 256;
+            // 128, down from 256.
+            //
+            // Resolution is the one setting that moves softness and cost the
+            // same way: fewer, larger texels blur further under the soft filter
+            // AND there is a quarter as much shadow map to fill and sample.
+            // On a contact shadow under a chair the blur is welcome -- these
+            // are meant to read as pools, not as cut-outs.
+            l.shadowCustomResolution = 128;
         }
         _objectCount++;
 
@@ -2243,10 +2737,20 @@ public static class PubEnvironmentBuilder
                     float sw = r[2] * letterW;
                     float sh = r[3] * height;
 
+                    // Each stroke sits a fraction deeper than the last.
+                    //
+                    // Strokes OVERLAP by design -- the S's middle bar crosses
+                    // both its verticals, the M's centre drop meets its top bar
+                    // -- and two boxes at the same depth share a front plane,
+                    // which z-fights. It showed as flickering seams through the
+                    // S and the M. A third of a millimetre each is invisible
+                    // and gives the depth buffer something to separate.
+                    float zBias = sIdx * 0.0004f;
+
                     Box($"Sign_{c}{i}_{sIdx}", g,
                         new Vector3(x + (r[0] + r[2] * 0.5f) * letterW,
                                     centre.y - height * 0.5f + (r[1] + r[3] * 0.5f) * height,
-                                    centre.z),
+                                    centre.z - zBias),
                         new Vector3(sw, sh, depth), mat);
                 }
             }
@@ -2408,17 +2912,28 @@ public static class PubEnvironmentBuilder
         // whatever scale looked plausible -- a guess this asset happens to
         // remove the need for.
         const float DirtTileMetres = 2.8f;
-        dirt.mainTextureScale = new Vector2(yardX / DirtTileMetres,
-                                            yardZ / DirtTileMetres);
+        Tile(dirt, new Vector2(yardX / DirtTileMetres, yardZ / DirtTileMetres));
 
         // The worn path is deferred. It was a hard-edged box, which reads as a
         // slab dropped on the yard however good the dirt looks -- real trodden
         // earth has no edge, it fades. Fixing that needs a soft alpha falloff,
         // not a better texture, so it comes back as its own piece of work.
 
-        // Street / road outside the compound gate
+        // Street / road outside the compound gate.
+        //
+        // The texture is tiled from the road's real size rather than a fixed
+        // number, at 4 m a repeat, so the patched asphalt stays at life scale.
+        // Its lane markings were rotated 90 degrees into Assets/Textures/Road.png
+        // (see BlenderAssets -- and the normal map's R/G were remapped to match
+        // the rotation, not just spun round) because a cube's top face maps V to
+        // Z, and unrotated the markings ran ACROSS the carriageway.
+        float roadW = cHW * 2f + 10f;
+        const float roadD = 10f;
+        const float RoadTileMetres = 4f;
+        Material road = M("Mat_Pub_Road");
+        Tile(road, new Vector2(roadW / RoadTileMetres, roadD / RoadTileMetres));
         Box("StreetGround", ground, new Vector3(0f, -0.05f, fZ - 5f),
-            new Vector3(cHW * 2f + 10f, 0.06f, 10f), street, true);
+            new Vector3(roadW, 0.06f, roadD), road, true);
 
         // ---- Compound walls ----
         Transform walls = Group(g, "CompoundWalls");
@@ -2504,10 +3019,136 @@ public static class PubEnvironmentBuilder
             new Vector3(0f, signY, fZ - 0.04f),
             new Vector3(signW, signH, 0.04f), signGreen);
 
-        // Inner text/logo area (lighter panel)
+        // Inner light-box face, a lighter green than the frame.
         Box("Signboard_Inner", gate,
             new Vector3(0f, signY, fZ - 0.07f),
-            new Vector3(signW - 0.5f, signH - 0.40f, 0.02f), cream);
+            new Vector3(signW - 0.5f, signH - 0.40f, 0.02f),
+            M("Mat_Pub_SignboardLight"));
+
+        // Two floodlights over the board, on short arms.
+        //
+        // They stand 0.42 m OUT from the panel, not 0.16. A lamp a hand's width
+        // from a flat surface lights a hot circle and nothing else, however
+        // wide its cone -- the beam has no room to spread before it lands. Out
+        // on an arm and angled down, it washes the face the way a real sign
+        // floodlight does.
+        Material lampBody = M("Mat_Pub_SteelBlue");
+        Material lampFace = M("Mat_Pub_Tube") ?? M("Mat_Pub_Bulb");
+
+        // An L-shaped bracket off the TOP BEAM: up from the beam, then forward
+        // to the housing. The previous version put a short horizontal stub at
+        // 4.71 m while the beam is at 4.60, so it reached over the top of
+        // everything and touched nothing -- the lamps hung in the sky.
+        float beamY = signPostH;                 // 4.60, the beam they hang from
+        float lampY = beamY + 0.34f;
+        float lampZ = fZ - 0.42f;
+        float postZ = fZ - 0.03f;
+
+        for (int i = -1; i <= 1; i += 2)
+        {
+            float lx = i * (signW * 0.26f);
+
+            // Upright, standing ON the beam.
+            Box("SignLamp_Post_" + i, gate,
+                new Vector3(lx, (beamY + lampY) * 0.5f, postZ),
+                new Vector3(0.05f, lampY - beamY, 0.05f), lampBody);
+
+            // Arm forward from the top of the upright to the housing.
+            Box("SignLamp_Arm_" + i, gate,
+                new Vector3(lx, lampY, (postZ + lampZ) * 0.5f),
+                new Vector3(0.05f, 0.05f, postZ - lampZ), lampBody);
+
+            Box("SignLamp_Body_" + i, gate,
+                new Vector3(lx, lampY, lampZ),
+                new Vector3(0.30f, 0.12f, 0.18f), lampBody);
+            Box("SignLamp_Face_" + i, gate,
+                new Vector3(lx, lampY - 0.055f, lampZ),
+                new Vector3(0.26f, 0.03f, 0.15f), lampFace);
+        }
+
+        // ---- The two lamps actually light the board ----
+        //
+        // SPOT lights aimed down the board face, one per housing, and PIXEL
+        // rather than vertex: the panel is a box of eight vertices, so a vertex
+        // light on it produces a smear rather than a pool and the flicker would
+        // barely register.
+        //
+        // Range 3.0 m is chosen so they CANNOT reach the yard ground. The lamps
+        // sit 4.6 m up, and an extra pixel light over a single 23 x 31 m ground
+        // box is the expensive kind of mistake -- six pixel lights took this
+        // project from 72 fps to 36 once already. Confined to the board they
+        // touch roughly thirty small renderers and nothing else.
+        Light[] signLamps = new Light[2];
+
+        for (int i = 0; i < 2; i++)
+        {
+            float lx = (i == 0 ? -1f : 1f) * (signW * 0.26f);
+            Vector3 lp = new Vector3(lx, lampY - 0.06f, lampZ);
+
+            // Aimed STRAIGHT DOWN THE FACE from each lamp, not at the middle of
+            // the board. Both aimed at the centre is what made two bright spots
+            // meeting in the middle and left the ends dark; each washing the
+            // panel below itself, with cones wide enough to overlap, covers it
+            // end to end the way a lit hoarding actually looks.
+            Vector3 aim = new Vector3(lx, signY - signH * 0.40f, fZ - 0.07f);
+
+            GameObject lgo = new GameObject(i == 0 ? "Lamp_SignFlicker" : "Lamp_SignSteady");
+            lgo.transform.SetParent(gate, false);
+            lgo.transform.localPosition = lp;
+            lgo.transform.localRotation = Quaternion.LookRotation((aim - lp).normalized);
+
+            Light l = lgo.AddComponent<Light>();
+            l.type = LightType.Spot;
+            l.color = new Color(0.80f, 1f, 0.96f);
+            // Wide and soft: a narrow cone from this close is a spotlight, and
+            // a sign flood is meant to be a wash.
+            l.spotAngle = 125f;
+            l.innerSpotAngle = 78f;
+            l.range = 3.6f;
+            l.intensity = i == 0 ? 0f : 4.2f;   // the flicker component drives [0]
+
+            // No shadows. The reasoning for giving these two maps was that a
+            // 3.6 m range encloses only the sign, so each map is cheap -- true
+            // in isolation, and wrong in the place it mattered. At the entrance
+            // the sign and the whole hall are in view TOGETHER, so these two
+            // maps stacked on top of the interior ones exactly where the drop
+            // was reported. They are also ForcePixel, so they hold two of the
+            // four pixel-light slots at that same moment.
+            //
+            // The sign still reads: the flood lights it, the flicker still
+            // drives intensity, and only the lettering's cast shadow is lost.
+            l.shadows = LightShadows.None;
+            l.shadowStrength = 0.55f;
+            l.shadowBias = 0.02f;
+            l.shadowNormalBias = 0.3f;
+            l.shadowNearPlane = 0.1f;
+            l.shadowCustomResolution = 256;
+            l.renderMode = LightRenderMode.ForcePixel;
+            signLamps[i] = l;
+            _objectCount++;
+        }
+
+        // ---- The failing tube ----
+        //
+        // ONE of the two lamps flickers; the other stays lit, so the sign never
+        // goes fully dark and the fault reads as one failing tube rather than a
+        // broken sign.
+        Transform flickerFace = gate.Find("SignLamp_Face_-1");
+        if (flickerFace != null)
+        {
+            var lamp = flickerFace.gameObject.AddComponent<FlickeringLamp>();
+            lamp.TargetLight = signLamps[0];
+            lamp.PeakIntensity = 4.6f;
+            lamp.GlowRenderer = flickerFace.GetComponent<Renderer>();
+            lamp.Clip = AssetDatabase.LoadAssetAtPath<AudioClip>(
+                "Assets/Audio/Sign/FluorescentFlicker.wav");
+            lamp.EnvelopeHz = 60f;
+            lamp.Envelope = BuildEnvelope(lamp.Clip, lamp.EnvelopeHz);
+        }
+        else
+        {
+            Debug.LogWarning("[PubEnvironment] SignLamp_Face_-1 not found; no flicker.");
+        }
 
         // "TASMAC" across the board, in dark green on the cream panel -- the
         // way these signs are actually painted. Letters are BUILT, not
@@ -2516,9 +3157,9 @@ public static class PubEnvironmentBuilder
         // already makes everything else out of boxes.
         SignText(gate, "TASMAC",
                  new Vector3(0f, signY, fZ - 0.095f),
-                 signW - 0.9f,          // leave a margin inside the cream panel
+                 signW - 0.9f,          // leave a margin inside the lit panel
                  (signH - 0.40f) * 0.62f,
-                 signGreen);
+                 M("Mat_Pub_SignboardText"));
 
         // ---- Gate leaves (half-height wooden, slightly ajar) ----
         Transform leaves = Group(g, "GateLeaves");
@@ -2566,6 +3207,18 @@ public static class PubEnvironmentBuilder
                  new Vector3(poleX - 0.6f + i * 0.6f, 6.32f, poleFZ),
                  0.05f, 0.06f, pole, Vector3.zero);
         }
+
+        // Service drop from the pole to the signboard.
+        //
+        // A lit sign has to be fed from somewhere, and the pole is already
+        // there -- without the wire the board reads as glowing by magic. Built
+        // as short straight segments following a PARABOLIC SAG rather than one
+        // straight line, because a taut horizontal cable is the giveaway that
+        // something is CG; real span wire always hangs.
+        SagWire(utilPole, "ServiceDrop",
+                new Vector3(poleX - 0.6f, 6.28f, poleFZ),               // insulator
+                new Vector3(signW * 0.5f - 0.1f, signY + signH * 0.5f, fZ - 0.05f),
+                0.42f, M("Mat_Pub_SignWire"));
 
         // ---- Signs on compound walls ----
         Transform signs = Group(g, "CompoundSigns");
