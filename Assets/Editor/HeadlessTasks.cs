@@ -20,6 +20,19 @@ public static class HeadlessTasks
 
     public static void RebuildScene()
     {
+        // Force every model to reimport before the scene is rebuilt.
+        //
+        // Blender rewrites these FBXs between runs and Unity does NOT reliably
+        // notice: a regenerated model can be picked up as its PREVIOUS import,
+        // so a real change looks like it did nothing. That has cost time twice
+        // -- once making a corrected hand export look unchanged, and once
+        // shipping a build with the old grass in it while the files on disk
+        // were already right.
+        foreach (string guid in AssetDatabase.FindAssets("t:GameObject", new[] { "Assets/Models" }))
+            AssetDatabase.ImportAsset(AssetDatabase.GUIDToAssetPath(guid),
+                                      ImportAssetOptions.ForceUpdate);
+        AssetDatabase.Refresh();
+
         Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
         if (!scene.IsValid())
         {
