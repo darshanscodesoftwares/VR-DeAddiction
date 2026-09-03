@@ -42,6 +42,18 @@ public static class XRRigBuilder
     // Comfort defaults. Slower than the desktop walk speed on purpose --
     // fast continuous locomotion is a common nausea trigger.
     const float MoveSpeed = 1.6f;
+
+    // Turning. Smooth by default: the thumbstick sweeps the view like a game
+    // controller's right stick instead of jumping in fixed steps.
+    //
+    // Snap turning is the safer choice for a clinical population and was the
+    // original setting -- rotating the world under someone who is not physically
+    // turning is the single biggest nausea trigger in VR, and snap avoids it by
+    // giving no motion to track. It is kept one flag away rather than deleted,
+    // because a patient who reports discomfort should be switched back without
+    // a code change.
+    const bool SmoothTurn = true;
+    const float SmoothTurnDegreesPerSecond = 90f;   // ~0.5 s for a 45 deg look
     const float SnapTurnDegrees = 45f;
 
     /// <summary>
@@ -164,12 +176,22 @@ public static class XRRigBuilder
         move.forwardSource = camGo.transform;   // walk where you look
         BindVec2(move.leftHandMoveInput, "Move", "<XRController>{LeftHand}/thumbstick");
 
-        // Snap turning rather than smooth turning: markedly less nauseating,
-        // which matters for a clinical population.
-        SnapTurnProvider turn = rig.AddComponent<SnapTurnProvider>();
-        turn.mediator = mediator;
-        turn.turnAmount = SnapTurnDegrees;
-        BindVec2(turn.rightHandTurnInput, "Turn", "<XRController>{RightHand}/thumbstick");
+        if (SmoothTurn)
+        {
+            ContinuousTurnProvider turn = rig.AddComponent<ContinuousTurnProvider>();
+            turn.mediator = mediator;
+            turn.turnSpeed = SmoothTurnDegreesPerSecond;
+            BindVec2(turn.rightHandTurnInput, "Turn",
+                     "<XRController>{RightHand}/thumbstick");
+        }
+        else
+        {
+            SnapTurnProvider turn = rig.AddComponent<SnapTurnProvider>();
+            turn.mediator = mediator;
+            turn.turnAmount = SnapTurnDegrees;
+            BindVec2(turn.rightHandTurnInput, "Turn",
+                     "<XRController>{RightHand}/thumbstick");
+        }
 
         // Diagnostic framerate logger (logcat "PERF"). Remove for clinical builds.
         rig.AddComponent<PerformanceProbe>();
