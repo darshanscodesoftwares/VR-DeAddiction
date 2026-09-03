@@ -88,6 +88,24 @@ public static class QuestProjectSetup
         // APK for sideloading over adb, not AAB (that is for store upload).
         EditorUserBuildSettings.buildAppBundle = false;
 
+        // ---- Batching -----------------------------------------------------
+        //
+        // 635 of this scene's renderers are marked BatchingStatic, and the
+        // Android batching setting was never written -- the platform entry in
+        // ProjectSettings was an empty list, so it was taking whatever the
+        // default happened to be rather than anything decided here.
+        //
+        // Static batching is the single biggest draw-call saving available to
+        // this project. Draw calls, not triangles, are what it runs out of --
+        // looking down the length of the hall puts almost every object on
+        // screen at once, which is exactly the view that drops frames.
+        //
+        // Dynamic batching stays OFF: it re-transforms vertices on the CPU
+        // every frame and only applies to small meshes, and the movable objects
+        // here are the ~50 grabbables, which already share meshes and materials
+        // and so instance instead.
+        SetBatching(BuildTarget.Android, staticBatching: true, dynamicBatching: false);
+
         ConfigureQualityForVR();
 
         AssetDatabase.SaveAssets();
@@ -110,6 +128,34 @@ public static class QuestProjectSetup
     /// rather than main memory, so 4x typically costs only a few percent --
     /// unlike on desktop, where it is expensive. It is close to free quality.
     /// </summary>
+    /// <summary>
+    /// Sets per-platform batching. The typed API has moved between Unity
+    /// versions, so this goes through reflection and reports plainly if it is
+    /// not there rather than silently doing nothing.
+    /// </summary>
+    static void SetBatching(BuildTarget platform, bool staticBatching, bool dynamicBatching)
+    {
+        var method = typeof(PlayerSettings).GetMethod(
+            "SetBatchingForPlatform",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic);
+
+        if (method == null)
+        {
+            Debug.LogWarning("[QuestSetup] SetBatchingForPlatform not found; " +
+                             "batching left at the project default.");
+            return;
+        }
+
+        method.Invoke(null, new object[]
+        {
+            platform, staticBatching ? 1 : 0, dynamicBatching ? 1 : 0
+        });
+        Debug.Log($"[QuestSetup] Batching for {platform}: static={staticBatching}, " +
+                  $"dynamic={dynamicBatching}.");
+    }
+
     static void ConfigureQualityForVR()
     {
         int original = QualitySettings.GetQualityLevel();
@@ -130,7 +176,10 @@ public static class QuestProjectSetup
             // 4, not 6: only four lights are ForcePixel, and each pixel light
             // costs a forward pass per affected renderer. Six halved the
             // framerate on device (72 -> ~36 fps).
-            QualitySettings.pixelLightCount = 4;
+            // 3, not 4. Each pixel light adds a full render pass per affected
+            // renderer, and with ~650 renderers the fourth slot is the most
+            // expensive light in the scene for the least visible gain.
+            QualitySettings.pixelLightCount = 3;
 
             // SHADOWS.
             //
@@ -153,7 +202,29 @@ public static class QuestProjectSetup
             // more expensive soft filter. The roof is sealed, so sun shadows
             // are only ever seen outdoors, near the player.
             QualitySettings.shadowCascades = 1;
-            QualitySettings.shadowDistance = 14f;
+
+            // 22 m: far enough to cover the hall end to end.
+            //
+            // This is the biggest lever on shadow cost -- every caster inside it
+            // is re-rendered into every shadow map, every frame -- and I cut it
+            // to 9 m to pay for more shadowed lights. That is what made shadows
+            // appear and disappear as you walked: anything past 9 m simply
+            // stopped casting. Consistency is worth more here than the saving,
+            // so it goes back up past the 20 m length of the hall.
+            // 16 m. 22 covered the hall corner to corner but re-rendered every
+            // caster in it into every map; 9 was cheap but made shadows vanish
+            // as you walked. 16 keeps everything you are near and working with
+            // shadowed, and only the far end of the room falls out.
+            // 12 m. Looking down the hall puts the whole room in view, and every
+            // caster inside this radius is re-rendered into every shadow map.
+            // At 12 the shadows you are standing among are all still there and
+            // the far end of the room stops paying for shadows nobody can
+            // resolve at that distance anyway.
+            QualitySettings.shadowDistance = 10f;
+
+            // Nothing in this scene is reflective enough to justify realtime
+            // probes, and they re-render the surroundings.
+            QualitySettings.realtimeReflectionProbes = false;
 
             // StableFit keeps shadow edges from crawling as the player walks.
             // CloseFit uses texels more efficiently but shimmers, and shimmer
