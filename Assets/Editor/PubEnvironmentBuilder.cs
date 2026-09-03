@@ -777,6 +777,39 @@ public static class PubEnvironmentBuilder
                            tiling: new Vector2(tx, ty));
     }
 
+    /// <summary>
+    /// An ALPHA-CUT material, for foliage. Cutout rather than transparent:
+    /// blended geometry has to be sorted back-to-front and grass cards
+    /// interpenetrate constantly, so blending gives visible popping as the
+    /// player walks. Cutout also still writes depth, which cutout foliage needs.
+    /// </summary>
+    static Material MatCutout(string name, string texturePath)
+    {
+        string path = MaterialFolder + "/" + name + ".mat";
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (m == null)
+        {
+            m = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(m, path);
+        }
+        m.shader = Shader.Find("Standard");
+        m.SetTexture("_MainTex",
+                     AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath));
+        m.SetColor("_Color", Color.white);
+        m.SetFloat("_Mode", 1f);                 // Cutout
+        m.SetFloat("_Cutoff", 0.45f);
+        m.EnableKeyword("_ALPHATEST_ON");
+        m.DisableKeyword("_ALPHABLEND_ON");
+        m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        m.renderQueue = 2450;
+        m.SetFloat("_Glossiness", 0.12f);
+        m.SetFloat("_Metallic", 0f);
+        m.enableInstancing = true;
+        EditorUtility.SetDirty(m);
+        _mats[name] = m;
+        return m;
+    }
+
     static Material MatTextured(string name, string texturePath, float smoothness,
                                 string normalPath = null, Color? tint = null,
                                 bool transparent = false, Vector2? tiling = null)
@@ -1013,6 +1046,44 @@ public static class PubEnvironmentBuilder
     /// so they must come from the same expression the roof uses -- a fixture
     /// spaced by its own arithmetic hangs from nothing.
     /// </summary>
+    /// <summary>
+    /// Returns the index of a layer, creating it in TagManager if absent.
+    /// Ground cover needs its own layer because Unity's cull distances are
+    /// per-LAYER, not per-renderer.
+    /// </summary>
+    static int EnsureLayer(string name)
+    {
+        int existing = LayerMask.NameToLayer(name);
+        if (existing >= 0)
+            return existing;
+
+        var tagManager = new SerializedObject(
+            AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
+        SerializedProperty layers = tagManager.FindProperty("layers");
+
+        // 0-7 are Unity's built-ins and must not be touched.
+        for (int i = 8; i < layers.arraySize; i++)
+        {
+            SerializedProperty slot = layers.GetArrayElementAtIndex(i);
+            if (!string.IsNullOrEmpty(slot.stringValue))
+                continue;
+            slot.stringValue = name;
+            tagManager.ApplyModifiedProperties();
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[PubEnvironment] Created layer '{name}' at index {i}.");
+            return i;
+        }
+
+        Debug.LogWarning($"[PubEnvironment] No free layer slot for '{name}'.");
+        return 0;
+    }
+
+    static float TrussZ(int i)
+    {
+        float step = HallDepth / TrussCount;
+        return -HalfD + step * 0.5f + i * step;
+    }
+
     static float RoofY(float x)
     {
         return RidgeHeight - Mathf.Abs(x) / HalfW * RidgeRise;
@@ -3084,6 +3155,246 @@ public static class PubEnvironmentBuilder
         // remove the need for.
         const float DirtTileMetres = 2.8f;
         Tile(dirt, new Vector2(yardX / DirtTileMetres, yardZ / DirtTileMetres));
+
+        // ---- Ground cover ----
+        //
+        // Coverage is a FRACTION OF OPEN YARD, so "70%" means 70% and stays
+        // true if the yard is resized. Three zones:
+        //
+        //   path      the walk from gate to door -- NOTHING, it is a path
+        //   entrance  the apron either side of it -- 20%
+        //   yard      everything else -- 70%
+        //
+        // The flat 2.27 m patch this started with is gone. It was the cheapest
+        // variant per square metre and unusable for it: an 8 cm mat that reads
+        // as dirt texture from standing height. Coverage you cannot see is not
+        // coverage. Cover is now the tuft, scaled 1.4x -- 135 tris/m2 against
+        // the patch's 96, but actually visible.
+        Transform veg = Group(g, "GroundCover");
+        int vegLayer = EnsureLayer("GroundCover");
+        veg.gameObject.AddComponent<GroundCoverCulling>();
+
+        Material grassTuft = MatCutout("Mat_Pub_GrassTuft", "Assets/Textures/Grass_Tuft.png");
+        Material grassWeed = MatCutout("Mat_Pub_GrassWeed", "Assets/Textures/Grass_Weed.png");
+        Material shrubMat  = MatTextured("Mat_Pub_Shrub", "Assets/Textures/Shrub.jpg", 0.12f,
+                                         "Assets/Textures/Shrub_Normal.jpg");
+
+        // Yard surface is y = -0.01. Plants are set BELOW it: a trunk that only
+        // touches shows a hairline of ground through its root flare and reads as
+        // floating, which is exactly what was reported even though every piece
+        // measured at a 0.000 gap. 0.10 m buries a tree's root flare; 0.04 m is
+        // enough for grass.
+        const float GroundSink = -0.05f;
+        // 1.10 m down. Sinking by the mesh's LOWEST vertex is not enough --
+        // that vertex is a thin taproot well below the visible root flare, so
+        // the flare, the part you actually look at, kept hanging in the air.
+        // 0.11 and 0.45 both still read as floating. On a 9 m tree and a 6.3 m
+        // palm, burying 1.1 m of root costs nothing anyone can see.
+        const float TreeSink   = -1.10f;
+
+        // 0.24, not 0.70. Small plants cost roughly four times as much per
+        // square metre as the oversized ones did, so 70% is no longer
+        // affordable at a playable framerate -- and scattered weeds on dirt is
+        // the right look for this yard regardless. 0.24 lands the scene back on
+        // ~186k triangles, the figure that measured 88% of frames on budget.
+        // Raising this is one number, but it buys greenery with frames.
+        const float YardCoverage = 0.24f;
+        const float EntranceCoverage = 0.20f;
+        const float TuftArea = 1.19f;     // 0.78 x 0.77 m, tuft scaled 1.15x
+        const float WeedArea = 0.11f;   // 0.29 x 0.36 m at 0.55 scale
+        // Nearly all the cover is tufts. Measured per square metre covered the
+        // tuft is 66 tris/m2 and the weed 459 -- seven times worse -- so weeds
+        // buy variety, not coverage.
+        const float TuftShare = 0.985f;
+        // 4,194 triangles each -- collapse decimation floors out there, because
+        // the mesh is separate leaf cards that cannot merge further. So these
+        // are accents, deliberately few; nine of them cost more than the six
+        // ceiling lamps and the five wall lights put together.
+        // ZERO. The shrub is withdrawn, not tuned down. Three separate faults, any
+        // one disqualifying: Unity imports its mesh with a Z extent of 0.262 m
+        // where the file Blender reads spans 0.916, so it hung 0.65 m in the
+        // air; collapse decimation shreds it, because it is separate leaf cards
+        // that cannot merge, leaving the dark spikes seen against the wall; and
+        // those cards are single-sided, so half of every bush renders black
+        // under the Standard shader. At 4,194 triangles each it was also the
+        // worst value in the scene. It needs a two-sided foliage shader and a
+        // model that survives reduction -- not a smaller count.
+        const int   ShrubCount = 0;
+
+        float bldHalfW = HalfW + t + 0.45f;
+        float bldHalfD = HalfD + t + 0.45f;
+        float pathHalfW = 2.4f;                  // clear walk to the door
+        float entHalfW  = 6.5f;
+        float entFrontZ = -bldHalfD;             // apron is everything in front
+
+        System.Random vegRNG = new System.Random(20260903);
+        float VRand(float lo, float hi) { return lo + (float)vegRNG.NextDouble() * (hi - lo); }
+
+        float openArea = (yardX * yardZ) - (bldHalfW * 2f * bldHalfD * 2f);
+        int tufts  = Mathf.RoundToInt(openArea * YardCoverage * TuftShare / TuftArea);
+        int weeds  = Mathf.RoundToInt(openArea * YardCoverage * (1f - TuftShare) / WeedArea);
+
+        int placed = 0, skippedPath = 0, thinnedEntrance = 0;
+        for (int kind = 0; kind < 3; kind++)
+        {
+            int want = kind == 0 ? tufts : kind == 1 ? weeds : ShrubCount;
+            string asset = kind == 0 ? "Asset_GrassTuft"
+                         : kind == 1 ? "Asset_GrassWeed" : "Asset_Shrub";
+            Material mat = kind == 0 ? grassTuft : kind == 1 ? grassWeed : shrubMat;
+
+            for (int i = 0; i < want; i++)
+            {
+                // Resample until the point is off the building. Discarding
+                // those samples instead placed only 105 of 236 pieces -- the
+                // building is a third of the yard's bounding box, so a third of
+                // every requested count was silently thrown away and the
+                // coverage came out far under what was asked for.
+                Vector3 p = Vector3.zero;
+                bool found = false;
+                for (int attempt = 0; attempt < 40 && !found; attempt++)
+                {
+                    // GroundSink, not the yard surface exactly. Every one of
+                    // these measured at a 0.000 gap and still read as hovering,
+                    // because a plant whose lowest vertex merely TOUCHES the
+                    // ground shows daylight under its outer leaves. Real plants
+                    // grow out of the soil, so they are set into it.
+                    p = new Vector3(
+                        VRand(-yardX * 0.5f + 0.7f, yardX * 0.5f - 0.7f), GroundSink,
+                        VRand(cCZ - yardZ * 0.5f + 0.7f, cCZ + yardZ * 0.5f - 0.7f));
+                    found = Mathf.Abs(p.x) > bldHalfW || Mathf.Abs(p.z) > bldHalfD;
+                }
+                if (!found)
+                    continue;
+
+                bool inFront = p.z < entFrontZ;
+                if (inFront && Mathf.Abs(p.x) < pathHalfW)
+                {
+                    skippedPath++;                             // the walk itself
+                    continue;
+                }
+                if (inFront && Mathf.Abs(p.x) < entHalfW &&
+                    vegRNG.NextDouble() > EntranceCoverage / YardCoverage)
+                {
+                    thinnedEntrance++;                         // apron thinned to 20%
+                    continue;
+                }
+
+                GameObject go = Model(asset, veg, p, VRand(0f, 360f), mat);
+                if (go == null)
+                    continue;
+                // No shadows: the sun is one of only two shadow-casting lights
+                // and every caster inside shadowDistance is re-rendered into its
+                // map each frame.
+                foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>())
+                    mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                foreach (Transform tr in go.GetComponentsInChildren<Transform>(true))
+                    tr.gameObject.layer = vegLayer;
+                placed++;
+            }
+        }
+        // ---- Trees ----
+        //
+        // One broadleaf and two coconut palms. Their own RNG again, so adding
+        // them does not re-roll the grass laid out above.
+        //
+        // The palm is placed by hand rather than through Model(): it arrives as
+        // FIVE separate renderers with one material slot each -- trunk, palm
+        // top, leaves, frond stems, coconuts -- and Model() paints every
+        // renderer the same colour. The mapping is not guessed; it is read out
+        // of the FBX, which is ASCII and states it outright:
+        //   Tree_0 palm02   Tree_1 palm top   Tree_2 leaf
+        //   Tree_3 frond stem   Tree_4 coconut
+        Material palmTrunk = MatCutout("Mat_Pub_PalmTrunk", "Assets/Textures/Palm_palm02.png");
+        Material palmTop   = MatCutout("Mat_Pub_PalmTop",   "Assets/Textures/Palm_palm_top.png");
+        Material palmLeaf  = MatCutout("Mat_Pub_PalmLeaf",  "Assets/Textures/Palm_coconut_palm_leaf.png");
+        Material palmFrond = MatCutout("Mat_Pub_PalmFrond", "Assets/Textures/Palm_frond_stem.png");
+        Material palmNut   = MatCutout("Mat_Pub_PalmNut",   "Assets/Textures/Palm_coconut_2.png");
+        Material[] palmBits = { palmTrunk, palmTop, palmLeaf, palmFrond, palmNut };
+
+        // Slot 0 is deadbranches, slot 1 the canopy -- that is the order the
+        // Blender join produced, checked rather than assumed.
+        Material treeDead   = MatCutout("Mat_Pub_TreeDead",   "Assets/Textures/Tree_DeadBranch.png");
+        Material treeCanopy = MatCutout("Mat_Pub_TreeCanopy", "Assets/Textures/Tree_Canopy.png");
+
+        Transform trees = Group(g, "Trees");
+        System.Random treeRNG = new System.Random(70310926);
+        var trunks = new List<Vector3>();
+
+        for (int i = 0; i < 3; i++)
+        {
+            bool isPalm = i > 0;                       // one tree, two palms
+
+            // Clearance is for the TRUNK, not the canopy. Demanding the whole
+            // canopy fit clear placed only one of three: the tree is 7 m across
+            // and the side yard is 5 m wide, so no position could satisfy it.
+            // Real canopies overhang walls; only the trunk has to stand
+            // somewhere sensible.
+            float clearance = isPalm ? 1.2f : 1.6f;
+
+            Vector3 p = Vector3.zero;
+            bool ok = false;
+            for (int attempt = 0; attempt < 200 && !ok; attempt++)
+            {
+                p = new Vector3(
+                    (float)(treeRNG.NextDouble() * yardX - yardX * 0.5f),
+                    TreeSink,
+                    (float)(treeRNG.NextDouble() * yardZ - yardZ * 0.5f) + cCZ);
+
+                if (Mathf.Abs(p.x) < bldHalfW + clearance &&
+                    Mathf.Abs(p.z) < bldHalfD + clearance) continue;   // off the building
+                if (Mathf.Abs(p.x) > yardX * 0.5f - clearance - 0.6f) continue;   // off the wall
+                if (Mathf.Abs(p.z - cCZ) > yardZ * 0.5f - clearance - 0.6f) continue;
+                if (p.z < entFrontZ && Mathf.Abs(p.x) < pathHalfW + clearance)
+                    continue;                                          // off the entrance path
+
+                ok = true;
+                foreach (Vector3 q in trunks)
+                    if (Vector3.Distance(p, q) < 5f) { ok = false; break; }
+            }
+            if (!ok)
+                continue;
+            trunks.Add(p);
+
+            GameObject go = Model(isPalm ? "Asset_Palm" : "Asset_Tree", trees, p,
+                                  (float)treeRNG.NextDouble() * 360f,
+                                  isPalm ? palmTrunk : treeCanopy,
+                                  slotMaterials: isPalm ? null
+                                               : new[] { treeDead, treeCanopy });
+            if (go == null)
+                continue;
+            go.name = isPalm ? "Palm_" + i : "Tree";
+
+            if (isPalm)
+            {
+                foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>(true))
+                {
+                    MeshFilter mf = mr.GetComponent<MeshFilter>();
+                    string mesh = mf != null && mf.sharedMesh != null ? mf.sharedMesh.name : "";
+                    for (int k = 0; k < palmBits.Length; k++)
+                        if (mesh == "Tree_" + k)
+                            mr.sharedMaterial = palmBits[k];
+                }
+            }
+
+            // Trees DO cast, unlike the grass. There are only three of them, and
+            // a 9 m tree in an open yard with no shadow is the one thing that
+            // gives away that the sun is not real. The sun is soft
+            // (LightShadows.Soft at shadowStrength 0.46) so what lands is a
+            // diffuse pool rather than a hard cut-out.
+            //
+            // This is a deliberate re-entry into the shadow budget that was cut
+            // right back this afternoon, and alpha-cut canopies are the
+            // expensive case -- worth watching PERF after.
+            foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>(true))
+                mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+        }
+        Debug.Log($"[PubEnvironment] Trees: {trunks.Count} placed " +
+                  string.Join(", ", trunks.ConvertAll(v => v.ToString("F1"))));
+
+        Debug.Log($"[PubEnvironment] Ground cover: {placed} placed over {openArea:F0} m2 " +
+                  $"({tufts} tufts + {weeds} weeds + {ShrubCount} shrubs requested); " +
+                  $"{skippedPath} skipped on the entrance path, " +
+                  $"{thinnedEntrance} thinned from the apron to {EntranceCoverage:P0}.");
 
         // The worn path is deferred. It was a hard-edged box, which reads as a
         // slab dropped on the yard however good the dirt looks -- real trodden

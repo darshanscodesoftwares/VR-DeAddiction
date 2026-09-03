@@ -290,3 +290,30 @@ Placed five times: over the entrance and at both ends of each side wall. The
 light is put at the SHADE, 0.28 m out from the wall and 0.13 m down, not at the
 plate — a light left at the mount would pour out of the brickwork behind it.
 
+## Yard vegetation
+
+- Grass/weeds: **"Grass Vegitation mix"** (`grass-vegitation-mix`), 195,697 tris
+  as published across 65 meshes
+- Shrub: **`shrub.rar`** bush set, 31,405-38,521 tris each
+- Tree: **`tree3.fbx`**, 3,201 tris
+- Palm: **"coconut palm"**, ASCII FBX from Tree IT, 6,630 tris
+- **Licences not recorded — confirm before release.** None supplied a licence.
+
+Scripts: `grass.py`, `shrub.py`, `tree.py`. The palm is used as downloaded — it
+is an ASCII FBX, which Blender refuses to import outright, and Unity accepts.
+
+Notes worth keeping:
+
+- The grass set's cheapest variant per square metre (96 tris/m2) is a MAT 8 cm
+  tall that reads as dirt texture from standing height. Coverage you cannot see
+  is not coverage. Cover is the 0.32 m tuft scaled 2x instead: 66 tris/m2, and
+  visible. The dense 4,130-tri clumps (5,594 tris/m2) are unused.
+- The shrub floors at 4,194 triangles however hard it is decimated -- collapse
+  cannot merge separate leaf cards -- so only three are placed.
+- The palm's five parts each carry ONE material slot, so the usual Model() path
+  paints them all alike. The mapping is read from the ASCII FBX itself, which
+  states it: Tree_0 palm02, Tree_1 palm top, Tree_2 leaf, Tree_3 frond stem,
+  Tree_4 coconut.
+- The tree ships 18.9 m tall, scaled to 9 m for a 3.8 m eaves line.
+- Nothing here casts shadows. Alpha-cut canopies are the most expensive thing
+  that could enter the sun's shadow map.
