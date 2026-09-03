@@ -423,6 +423,21 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_SignWire", Rgb(28, 26, 24), 0.30f, 0.20f);
         Mat("Mat_Pub_ConcretePole",   Rgb(172, 168, 160), 0.10f, 0f);
         Mat("Mat_Pub_StreetGrey",     Rgb(92, 88, 84),    0.10f, 0f);
+        // Painted corrugated steel for the entrance doors, front and back. Same
+        // albedo; the back's normal map has its X and Y negated so its ridges
+        // read as grooves -- see the door build for why that is not optional.
+        // Slightly metallic and fairly matte: this is old painted sheet, not
+        // bare steel.
+        foreach (string dn in new[] { "Mat_Pub_DoorSteel", "Mat_Pub_DoorSteelBack" })
+        {
+            Material dm = MatTextured(dn, "Assets/Textures/DoorSteel.png", 0.28f,
+                                      dn.EndsWith("Back")
+                                          ? "Assets/Textures/DoorSteel_NormalBack.png"
+                                          : "Assets/Textures/DoorSteel_Normal.png");
+            dm.SetFloat("_Metallic", 0.30f);
+            EditorUtility.SetDirty(dm);
+        }
+
         // Asphalt: low smoothness, but not zero -- a road is not chalk.
         MatTextured("Mat_Pub_Road", "Assets/Textures/Road.png", 0.18f,
                     "Assets/Textures/Road_Normal.png");
@@ -1017,11 +1032,31 @@ public static class PubEnvironmentBuilder
         Box("Entrance_Jamb_R", g, new Vector3(entW * 0.5f, entH * 0.5f, frontZ),
             new Vector3(0.12f, entH, t * 1.15f), dado);
 
-        // Open entrance doors — two leaves swung inward (~75 deg).
-        Material doorSteel = M("Mat_Pub_SteelBlue");
-        Material doorWood  = M("Mat_Pub_GateWood");
+        // Open entrance doors -- two leaves swung inward, corrugated steel.
+        //
+        // Each leaf is one slab plus a thin skin on its reverse, because a box
+        // has ONE material and the two faces of a corrugated sheet are not the
+        // same surface: the back is the negative of the front, a groove wherever
+        // the front has a ridge. Lighting both faces from the same normal map
+        // would bulge the ridges toward the viewer from either side, which is
+        // impossible, and the door reads as a printed sticker rather than metal.
+        //
+        // Tiling comes from the leaf's real size at 1 m a repeat. The ACROSS
+        // count is rounded to a whole number so a corrugation is never sliced in
+        // half at the door's edge; the vertical is left exact, where the rust
+        // streaking has no repeating feature to misalign and the frame covers
+        // the ends anyway.
+        Material doorFront = M("Mat_Pub_DoorSteel");
+        Material doorBack  = M("Mat_Pub_DoorSteelBack");
         float doorLeafW = entW * 0.5f - 0.08f;
         float doorLeafH = entH - 0.06f;
+        const float CorrugationTileMetres = 1.0f;
+        Vector2 doorTile = new Vector2(
+            Mathf.Max(1f, Mathf.Round(doorLeafW / CorrugationTileMetres)),
+            doorLeafH / CorrugationTileMetres);
+        Tile(doorFront, doorTile);
+        Tile(doorBack, doorTile);
+        const float skinT = 0.012f;
 
         // Left door (hinged on left jamb, swung fully open against inner wall)
         Transform doorL = Group(g, "EntranceDoor_L");
@@ -1029,10 +1064,10 @@ public static class PubEnvironmentBuilder
         doorL.localEulerAngles = new Vector3(0f, 90f, 0f);
         Box("Frame_L", doorL,
             new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0f),
-            new Vector3(doorLeafW, doorLeafH, 0.05f), doorSteel);
-        Box("Panel_L", doorL,
-            new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0.03f),
-            new Vector3(doorLeafW - 0.10f, doorLeafH - 0.10f, 0.03f), doorWood);
+            new Vector3(doorLeafW, doorLeafH, 0.05f), doorFront);
+        Box("Skin_L", doorL,
+            new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0.025f + skinT * 0.5f),
+            new Vector3(doorLeafW, doorLeafH, skinT), doorBack);
 
         // Right door (hinged on right jamb, partially open)
         Transform doorR = Group(g, "EntranceDoor_R");
@@ -1040,10 +1075,10 @@ public static class PubEnvironmentBuilder
         doorR.localEulerAngles = new Vector3(0f, -35f, 0f);
         Box("Frame_R", doorR,
             new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0f),
-            new Vector3(doorLeafW, doorLeafH, 0.05f), doorSteel);
-        Box("Panel_R", doorR,
-            new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, -0.03f),
-            new Vector3(doorLeafW - 0.10f, doorLeafH - 0.10f, 0.03f), doorWood);
+            new Vector3(doorLeafW, doorLeafH, 0.05f), doorFront);
+        Box("Skin_R", doorR,
+            new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, -(0.025f + skinT * 0.5f)),
+            new Vector3(doorLeafW, doorLeafH, skinT), doorBack);
 
         // Stepped gable infill at both ends, following the shallow pitch.
         BuildGable(g, "Gable_Back", HalfD + t * 0.5f, plaster);

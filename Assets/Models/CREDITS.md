@@ -214,3 +214,33 @@ open the file and is wrong only once it is in the scene.
 Both were processed in Blender with the colorspace forced to Non-Color on read
 and write, so values round-trip untouched; left as sRGB the transform is applied
 twice and the asphalt comes back washed out.
+
+## Entrance doors
+
+- Files: `Assets/Textures/DoorSteel.png`, `DoorSteel_Normal.png`,
+  `DoorSteel_NormalBack.png`
+- Source: **ambientCG "Corrugated Steel 007 B"** —
+  https://ambientcg.com/a/CorrugatedSteel007B
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+Derived: the 2K Color and NormalGL maps, plus a **generated back-face normal**.
+No rotation needed here — the corrugations already run up the texture's V axis
+and the rust streaks run down it, which is the correct orientation for a door.
+
+`DoorSteel_NormalBack.png` has X and Y negated (R' = 1-R, G' = 1-G), because the
+reverse of a corrugated sheet is the NEGATIVE of its front: a groove wherever the
+front has a ridge. A box carries one material, so each leaf is the slab plus a
+12 mm skin on its reverse using this second material. Sharing one normal map
+across both faces would bulge the ridges toward the viewer from either side,
+which is physically impossible and reads as a printed sticker rather than metal.
+
+Tiled from the leaf's real size (2.02 x 2.54 m) at 1 m a repeat, giving 2 x 2.54
+— 1.01 m across and 1.00 m up, so the corrugations are not stretched. The ACROSS
+count is rounded to a whole number so a corrugation is never sliced in half at
+the door's edge; the vertical is left exact, where the rust streaking has no
+repeating feature to misalign.
+
+The doors were steel-blue frames with raised wooden panels before this. Metalness
+and roughness maps unused; `_Metallic` is a flat 0.30, old painted sheet rather
+than bare steel.
+
