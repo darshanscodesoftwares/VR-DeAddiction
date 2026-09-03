@@ -96,6 +96,22 @@ public class SeatedTableScenario : MonoBehaviour
     GameObject _fadeSphere;
     Material _fadeMaterial;
 
+    [Header("Stand-up button")]
+    // The imported MODEL, not just its mesh.
+    //
+    // A Blender FBX imports with a -90 degree X rotation on its root, and that
+    // rotation is what stands the Z-up mesh upright in Unity's Y-up world.
+    // Taking the bare mesh threw it away, so the icon lay flat facing the
+    // ceiling instead of standing up facing the patient.
+    [Tooltip("Close (X) icon model. Falls back to a plain cube if unset.")]
+    public GameObject ButtonPrefab;
+
+    [Tooltip("Material for the icon. Falls back to a flat green if unset.")]
+    public Material ButtonMaterial;
+
+    [Tooltip("How big the button is across, in metres.")]
+    public float ButtonSize = 0.075f;
+
     Transform _standButton;
     Material _standButtonMaterial;
 
@@ -444,7 +460,7 @@ public class SeatedTableScenario : MonoBehaviour
     /// hand-tracking grasp both drive it through the same path as picking up a
     /// glass -- no separate input route that only this control exercises.
     ///
-    /// GREEN, NOT RED, AND ONLY WHEN SEATED. It sits where the quit button used
+    /// A CLOSE (X) ICON, AND ONLY WHEN SEATED. It sits where the quit button used
     /// to, so it must not be mistaken for it: different colour, and it is the
     /// only box in the scene, because two similar boxes doing different things
     /// is exactly how someone leaves the app when they meant to stand up.
@@ -454,29 +470,69 @@ public class SeatedTableScenario : MonoBehaviour
         if (_origin == null || _origin.Camera == null)
             return;
 
-        GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        go.name = "StandUpButton";
-        go.transform.SetParent(_origin.transform, false);
-        go.transform.localScale = Vector3.one * 0.075f;
-        _standButton = go.transform;
+        GameObject go;
+        MeshRenderer mr;
 
-        var mr = go.GetComponent<MeshRenderer>();
+        if (ButtonPrefab != null)
+        {
+            // A close (X) icon, which says what it does.
+            //
+            // The model goes in as a CHILD carrying the prefab's own rotation
+            // and scale, exactly as PubEnvironmentBuilder.Model does. The
+            // parent then owns the collider and the grab, so the button can be
+            // moved and turned without disturbing the import transform that
+            // stands the mesh upright.
+            go = new GameObject("StandUpButton");
+            go.transform.SetParent(_origin.transform, false);
+
+            GameObject visual = Instantiate(ButtonPrefab, go.transform);
+            visual.name = "Icon";
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = ButtonPrefab.transform.localRotation;
+            visual.transform.localScale = ButtonPrefab.transform.localScale;
+
+            mr = visual.GetComponentInChildren<MeshRenderer>();
+            _standButtonMaterial = ButtonMaterial;
+            if (_standButtonMaterial != null)
+                foreach (MeshRenderer r in visual.GetComponentsInChildren<MeshRenderer>())
+                    r.sharedMaterial = _standButtonMaterial;
+
+            // Scale from the RENDERED bounds, so the button ends up the size
+            // asked for whatever units the asset happens to arrive in.
+            Bounds b = RendererBounds(visual);
+            float widest = Mathf.Max(b.size.x, Mathf.Max(b.size.y, b.size.z));
+            if (widest > 1e-4f)
+                visual.transform.localScale *= ButtonSize / widest;
+
+            // A box, NOT a MeshCollider: this is grabbed, so its collider moves
+            // every frame, and a moving mesh collider must be convex and costs
+            // far more than a box for a target this small. Padded, because it
+            // is the control a patient reaches for to get out of the chair.
+            BoxCollider bc = go.AddComponent<BoxCollider>();
+            bc.center = Vector3.zero;
+            bc.size = Vector3.one * (ButtonSize * 1.5f);
+        }
+        else
+        {
+            go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "StandUpButton";
+            go.transform.SetParent(_origin.transform, false);
+            go.transform.localScale = Vector3.one * 0.075f;
+            mr = go.GetComponent<MeshRenderer>();
+
+            _standButtonMaterial = new Material(Shader.Find("Standard"));
+            _standButtonMaterial.color = new Color(0.16f, 0.72f, 0.30f);
+            _standButtonMaterial.EnableKeyword("_EMISSION");
+            _standButtonMaterial.SetColor("_EmissionColor", new Color(0.18f, 0.85f, 0.34f));
+            _standButtonMaterial.globalIlluminationFlags =
+                MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            mr.sharedMaterial = _standButtonMaterial;
+            go.GetComponent<BoxCollider>().size = Vector3.one * 1.4f;
+        }
+
+        _standButton = go.transform;
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         mr.receiveShadows = false;
-
-        _standButtonMaterial = new Material(Shader.Find("Standard"));
-        _standButtonMaterial.color = new Color(0.16f, 0.72f, 0.30f);
-        _standButtonMaterial.EnableKeyword("_EMISSION");
-        _standButtonMaterial.SetColor("_EmissionColor", new Color(0.18f, 0.85f, 0.34f));
-        // A material built at runtime is treated as having black emission
-        // unless this is set, and the glow never appears.
-        _standButtonMaterial.globalIlluminationFlags =
-            MaterialGlobalIlluminationFlags.RealtimeEmissive;
-        mr.sharedMaterial = _standButtonMaterial;
-
-        // Bigger than it looks: this is the control a patient reaches for when
-        // they want out of the chair, so it must never be fiddly to hit.
-        go.GetComponent<BoxCollider>().size = Vector3.one * 1.4f;
 
         Rigidbody rb = go.AddComponent<Rigidbody>();
         rb.isKinematic = true;
@@ -494,6 +550,19 @@ public class SeatedTableScenario : MonoBehaviour
 
         go.SetActive(false);
         Debug.Log("[Scenario] Stand-up button built (hidden until seated).");
+    }
+
+    /// <summary>World-space bounds of every renderer under an object.</summary>
+    static Bounds RendererBounds(GameObject root)
+    {
+        var rs = root.GetComponentsInChildren<Renderer>();
+        if (rs.Length == 0)
+            return new Bounds(root.transform.position, Vector3.one * 0.1f);
+
+        Bounds b = rs[0].bounds;
+        for (int i = 1; i < rs.Length; i++)
+            b.Encapsulate(rs[i].bounds);
+        return b;
     }
 
     /// <summary>
@@ -519,7 +588,11 @@ public class SeatedTableScenario : MonoBehaviour
 
         Transform cam = _origin.Camera.transform;
         Quaternion yaw = Quaternion.Euler(0f, cam.eulerAngles.y, 0f);
-        Vector3 target = cam.position + yaw * new Vector3(0.30f, 0.06f, 0.42f);
+        // Right, up, forward from the head. Closer and further left than it was,
+        // and back above the eye line: at 0.27 right / 0.38 forward it sat out
+        // near arm's length and off to the side, which reads as distant in a
+        // headset even though the numbers look small on paper.
+        Vector3 target = cam.position + yaw * new Vector3(0.18f, 0.05f, 0.32f);
 
         // Snap on the first frame it is shown. Easing in from wherever it was
         // parked would send it flying across the room into place.

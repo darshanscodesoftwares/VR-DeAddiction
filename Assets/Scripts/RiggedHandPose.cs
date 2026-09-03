@@ -28,6 +28,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
 
 public class RiggedHandPose : MonoBehaviour
 {
@@ -39,8 +40,13 @@ public class RiggedHandPose : MonoBehaviour
     [Tooltip("Root of the hand rig (the wrist bone).")]
     public Transform Wrist;
 
-    [Tooltip("Degrees the knuckle rotates at full curl. Later bones scale up.")]
-    public float MaxCurlDegrees = 62f;
+    // Curl is applied ON TOP of whatever rest pose the model ships with, so this
+    // number is only meaningful against a particular hand. 84 is calibrated for
+    // the XR Hands sample hands, which rest at ~19 deg of bend per finger joint.
+    [Tooltip("Degrees the knuckle rotates at full curl. Later bones scale up. " +
+             "Tuned to the hand model's rest pose -- changing the model means " +
+             "retuning this.")]
+    public float MaxCurlDegrees = 84f;
 
     [Tooltip("How fast the fingers follow the input.")]
     public float CurlSpeed = 14f;
@@ -56,10 +62,30 @@ public class RiggedHandPose : MonoBehaviour
 
     readonly List<Bone> _bones = new List<Bone>();
 
+    // Calibration for the grip limit, set against a reference pose.
+    //
+    // Two wrong answers came first: 0.085 m left the fingers nearly straight,
+    // and 0.22 m folded them into a fist. The target is neither -- it is a C
+    // shape, the fingers curled about half of their travel with the thumb
+    // opposing, which is how a hand actually sits round a bottle.
+    //
+    // 0.105 m puts a 42 mm bottle at 0.60 curl, which with 84 degrees of
+    // knuckle travel is a 50 degree bend: the C.
+    [Tooltip("Scale for how much a held object opens the hand. Larger = the " +
+             "fingers stay closer to a full fist.")]
+    public float HandSpan = 0.105f;
+
+    [Tooltip("However thick the object, the fingers close at least this far.")]
+    [Range(0f, 1f)] public float MinGripCurl = 0.55f;
+
     InputAction _grip;
     InputAction _trigger;
     float _fingerCurl;
     float _thumbCurl;
+
+    NearFarInteractor _interactor;
+    Object _lastHeld;
+    float _maxCurl = 1f;
 
     static readonly string[] k_Fingers = { "Index", "Middle", "Ring", "Little" };
     static readonly string[] k_Segments = { "Proximal", "Intermediate", "Distal" };
@@ -120,6 +146,53 @@ public class RiggedHandPose : MonoBehaviour
                                    $"<XRController>{{{hand}}}/trigger", expectedControlType: "Axis");
         _grip.Enable();
         _trigger.Enable();
+
+        _interactor = GetComponentInParent<NearFarInteractor>();
+    }
+
+    /// <summary>
+    /// How far the fingers may close, given what is in the hand.
+    ///
+    /// The curl was previously the same whatever was held, so the fingers shut
+    /// to a fist-sized grip around a bottle far thicker than a fist's opening
+    /// and the geometry passed straight through. A hand closing on a 84 mm
+    /// bottle simply cannot curl as far as an empty one.
+    ///
+    /// Measured from the held object's own collider -- its narrowest horizontal
+    /// dimension, which is what a hand actually closes across -- so it adapts
+    /// to a fat bottle and a thin glass without either being special-cased.
+    /// </summary>
+    void UpdateGripLimit()
+    {
+        if (_interactor == null)
+            return;
+
+        Object held = null;
+        if (_interactor.hasSelection && _interactor.interactablesSelected.Count > 0)
+            held = _interactor.interactablesSelected[0] as Object;
+
+        if (ReferenceEquals(held, _lastHeld))
+            return;
+        _lastHeld = held;
+
+        if (held == null)
+        {
+            _maxCurl = 1f;            // empty hand: close all the way
+            return;
+        }
+
+        var comp = held as Component;
+        Collider col = comp != null ? comp.GetComponentInChildren<Collider>() : null;
+        if (col == null)
+        {
+            _maxCurl = 1f;
+            return;
+        }
+
+        Vector3 size = col.bounds.size;
+        float across = Mathf.Min(size.x, size.z) * 0.5f;   // grip radius
+        _maxCurl = Mathf.Clamp(1f - across / Mathf.Max(0.01f, HandSpan),
+                               MinGripCurl, 1f);
     }
 
     void OnDestroy()
@@ -254,8 +327,17 @@ public class RiggedHandPose : MonoBehaviour
 
         // Grip closes the fist; the trigger also pulls index and thumb in, so
         // pinching and pointing both read correctly to an observer.
-        float targetFinger = Mathf.Clamp01(Mathf.Max(grip, trig * 0.85f));
-        float targetThumb = Mathf.Clamp01(Mathf.Max(grip, trig));
+        UpdateGripLimit();
+
+        // The input still says "close as hard as you like"; what is in the hand
+        // decides how far that actually goes.
+        float targetFinger = Mathf.Min(Mathf.Clamp01(Mathf.Max(grip, trig * 0.85f)), _maxCurl);
+        // The thumb closes a little further than the fingers, so it comes over
+        // the object rather than stopping level with them -- but only a little.
+        // At +0.22 it folded right across the palm, which is the fist pose, not
+        // a grip.
+        float targetThumb = Mathf.Min(Mathf.Clamp01(Mathf.Max(grip, trig)),
+                                      Mathf.Clamp01(_maxCurl + 0.10f));
 
         float t = 1f - Mathf.Exp(-CurlSpeed * Time.deltaTime);
         _fingerCurl = Mathf.Lerp(_fingerCurl, targetFinger, t);

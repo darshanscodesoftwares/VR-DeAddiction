@@ -350,11 +350,33 @@ public static class PubScenarioBuilder
 
         const float probeRadius = 0.45f;
         float[] distances = { 1.35f, 1.65f, 1.95f, 2.25f };
-        float[] sweep = { 0f, 25f, -25f, 50f, -50f, 75f, -75f, 100f, -100f };
 
-        foreach (float dist in distances)
+        // APPROACH FROM THE PATIENT'S LEFT, not from behind the chair.
+        //
+        // Straight behind reads well on paper but means walking through the
+        // chair to reach the seat. Stepping in from the side is how anyone
+        // actually sits down at a table.
+        //
+        // awayFromTable points from the table to the seat, so a +90 turn about
+        // Y sends it to -X: the seat faces +Z, and someone facing +Z has their
+        // left hand toward -X.
+        const float PreferredApproachDeg = 90f;
+        float[] offsets = { 0f, 15f, -15f, 30f, -30f, 45f, -45f, 60f, -60f };
+        float[] sweep = new float[offsets.Length];
+        for (int i = 0; i < offsets.Length; i++)
+            sweep[i] = PreferredApproachDeg + offsets[i];
+
+        // ANGLE FIRST, then distance.
+        //
+        // The other way round takes the nearest clear spot at any angle, which
+        // put the marker 75 degrees off to one side because the two or three
+        // positions directly behind the seat happened to be blocked at 1.35 m.
+        // Standing beside the chair and sliding in sideways is not how anyone
+        // approaches a seat. Direction matters more than proximity here, so a
+        // spot straight behind at 2.25 m now beats one alongside at 1.35 m.
+        foreach (float deg in sweep)
         {
-            foreach (float deg in sweep)
+            foreach (float dist in distances)
             {
                 Vector3 dir = Quaternion.Euler(0f, deg, 0f) * awayFromTable;
                 Vector3 candidate = seatPos + dir * dist;
