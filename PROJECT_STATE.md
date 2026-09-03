@@ -1,6 +1,6 @@
 # VR De-Addiction POC — Project State
 
-Complete working state as of **20 Aug 2026**. Written to survive context loss:
+Complete working state as of **3 Sep 2026**. Written to survive context loss:
 read this first to know what exists, how to drive it, and what has already been
 learned the hard way. Per-session narrative lives in `SESSION_LOG.md`.
 
@@ -189,8 +189,66 @@ Compute clearances against real collider extents, then verify with
 
 ---
 
+## What changed on 2-3 Sep (uncommitted)
+
+Detail in `TODAY_SEP02_03.md`. Headlines:
+
+- **Downloaded models replaced the procedural furniture** -- round bar tables,
+  plastic monobloc chairs, a Jack Daniel's bottle, two glasses, an X icon.
+  Each has a Blender script in `BlenderAssets/scripts/`. Source downloads are
+  NOT in the repo; the scripts regenerate the exports.
+- **Textures** on the yard (ambientCG Ground109), the hall floor (Concrete034)
+  and the sky (a de-dithered panorama). All with normal maps.
+- **Audio**: footsteps sliced from a real walk, a grab clink, and a fluorescent
+  flicker whose light is driven by the recording's own envelope.
+- **The TASMAC sign** rebuilt as a lit board with floodlights and a feed wire.
+- **`LayoutAudit.cs`** measures tables, chairs, props and the marker at build
+  time.
+
+### Numbers that other code depends on
+
+| Thing | Value | Where it comes from |
+|---|---|---|
+| Table radius | 0.367 m | `PubEnvironmentBuilder.TableRadius` |
+| Table top height | 0.775 m | `PubScenarioBuilder.TableTop` |
+| Chair spacing from table | 0.74-0.82 m | radius + chair half-depth 0.314 |
+| Hero prop usable radius | 0.30 m | rim minus widest prop |
+| Ground tiling | 2.8 m | ambientCG's stated capture size |
+| Floor tiling | 2 m | chosen |
+| Shadow distance | 12 m | `QuestProjectSetup` |
+| Interior shadow maps | 128 | `Downlight()` |
+
+## Lessons added on 2-3 Sep
+
+- **`Mat()` loads .mat ASSETS from disk and reuses them between builds.** A
+  material that was emissive once stays emissive until something clears it.
+  Changing `MatEmissive` to `Mat` in the source did nothing until `Mat()` was
+  made to clear emission explicitly.
+- **A Blender FBX imports with a -90 X rotation on its ROOT.** Take only the
+  mesh and you throw that away, and the asset lies flat. Instantiate the model
+  as a child and copy its rotation and scale -- what `Model()` already does.
+- **Compose scale, never assign it.** Assigning after an `origin_set` discards
+  the FBX's import scale; that produced a three-metre drinking glass.
+- **Sketchfab "texture" downloads are usually UV ATLASES**, not tileable
+  materials. Rendering the mesh from above beats trying to crop one.
+- **Overlapping box strokes at the same depth z-fight.** The sign's S and M
+  flickered until each stroke was given a 0.4 mm depth offset.
+- **Static batching was never enabled for Android** -- the platform entry was
+  an empty list, so it took a default rather than a decision.
+- **Fixed grip points with dynamic attach OFF break grabbing.** Tried and
+  reverted. Nudge the object AFTER the grab instead, and limit finger curl to
+  the held object's measured thickness.
+- **Layout faults are measurement faults.** Chairs in tables, bottles off rims,
+  crates in counters, a hero table wedged between neighbours -- every one was
+  invisible in the source and obvious the moment something measured it. Run
+  `LayoutAudit.Run` after any layout change.
+
 ## Open / not built
 
+0. **No framerate measurement exists for any change made on 2-3 Sep.** The
+   `PERF` probe only logs while the headset is worn, and every capture window
+   came back empty. Several large lighting changes went in on reasoning alone.
+   Measure before building further on them.
 1. **Clinical layer** — craving measurement, graded cue-intensity ladder,
    response-prevented handling, decompression exit. A design review was blunt:
    *"as written this builds a craving-induction engine, not a therapy."*

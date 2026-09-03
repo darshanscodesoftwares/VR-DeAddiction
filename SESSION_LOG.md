@@ -516,3 +516,21 @@ Also: a build was reported as succeeding because an APK existed on disk -- it
 was the previous day's file, and the real build had been killed by a tool
 timeout. **Verify builds by the `[Headless] APK built` log line, never by the
 artifact**, and run long builds detached.
+
+
+---
+
+## Session 6 — 2-3 September 2026
+
+Asset replacement and polish. Downloaded models took over from the procedural
+furniture (round tables, plastic chairs, a branded bottle, glasses, an X icon),
+real textures went on the yard, floor and sky, and the project got its first
+environmental audio beyond footsteps.
+
+The recurring theme was **numbers derived from a shape that no longer existed**:
+swapping rectangular tables for round ones invalidated the chair spacing, the
+collider, the containment lip and the prop layout, and each surfaced separately
+as a visual fault. `LayoutAudit.cs` was written so that class of fault is caught
+by measurement at build time rather than in the headset.
+
+Full detail in `TODAY_SEP02_03.md`. Nothing from this session is committed.
