@@ -423,6 +423,8 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_SignWire", Rgb(28, 26, 24), 0.30f, 0.20f);
         Mat("Mat_Pub_ConcretePole",   Rgb(172, 168, 160), 0.10f, 0f);
         Mat("Mat_Pub_StreetGrey",     Rgb(92, 88, 84),    0.10f, 0f);
+        MatTextured("Mat_Pub_BarLamp", "Assets/Textures/BarLamp.png", 0.35f,
+                    "Assets/Textures/BarLamp_Normal.png");
         // Painted corrugated steel for the entrance doors, front and back. Same
         // albedo; the back's normal map has its X and Y negated so its ridges
         // read as grooves -- see the door build for why that is not optional.
@@ -1002,6 +1004,11 @@ public static class PubEnvironmentBuilder
     }
 
     /// Height of the roof underside at a given x (shallow gable, ridge at x = 0).
+    /// <summary>
+    /// Centre-line Z of truss <paramref name="i"/>. Fixtures hang from these,
+    /// so they must come from the same expression the roof uses -- a fixture
+    /// spaced by its own arithmetic hangs from nothing.
+    /// </summary>
     static float RoofY(float x)
     {
         return RidgeHeight - Mathf.Abs(x) / HalfW * RidgeRise;
@@ -1203,10 +1210,9 @@ public static class PubEnvironmentBuilder
         Transform panels = Group(g, "RoofPanels");
         Transform ribs = Group(g, "Corrugation");
 
-        float step = HallDepth / TrussCount;
         for (int i = 0; i < TrussCount; i++)
         {
-            float z = -HalfD + step * 0.5f + i * step;
+            float z = TrussZ(i);
             BuildTruss(trusses, "Truss_" + i, z, steel);
 
             Box("Pillar_L_" + i, pillars, new Vector3(-HalfW + 0.12f, EavesHeight * 0.5f, z),
@@ -2140,24 +2146,45 @@ public static class PubEnvironmentBuilder
 
         // Ceiling fans hung off the trusses.
         Transform fans = Group(g, "Fans");
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < TrussCount; i++)
         {
             float x = (i % 2 == 0) ? -3.0f : 3.0f;
-            float z = -HalfD + 3.2f + (i / 2) * 6.2f;
-            Fan(fans, "Fan_" + i, new Vector3(x, EavesHeight, z), steel, blade, Rand(0f, 90f));
+            Fan(fans, "Fan_" + i, new Vector3(x, EavesHeight, TrussZ(i)),
+                steel, blade, Rand(0f, 90f));
         }
 
-        // Enamel cone pendants down the centre.
+        // Pendants down the centre, ONE PER TRUSS.
+        //
+        // They used to be spaced 4.3 m on their own arithmetic, which aligned
+        // with nothing: their rods stopped at EavesHeight (3.8) while the roof
+        // directly above them is the RIDGE at 4.5, so every one hung in a 0.7 m
+        // gap. Sitting them on TrussZ(i) puts a steel bottom chord at exactly
+        // the height they mount at, so they hang off structure that is there.
         Transform pend = Group(g, "Pendants");
-        for (int i = 0; i < 5; i++)
+        Material lampBody = M("Mat_Pub_BarLamp");
+        for (int i = 0; i < TrussCount; i++)
         {
-            float z = -HalfD + 2.6f + i * 4.3f;
             Transform p = Group(pend, "Pendant_" + i);
-            p.localPosition = new Vector3(0f, 0f, z);
-            Tube("Rod", p, new Vector3(0f, EavesHeight - 0.42f, 0f), 0.035f, 0.85f, metal, Vector3.zero);
-            Tube("Shade", p, new Vector3(0f, EavesHeight - 0.95f, 0f), 0.40f, 0.20f, enamel, Vector3.zero);
-            Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.06f, 0f), 0.13f, 0.10f, bulb, Vector3.zero);
-            _pendantBulbs.Add(new Vector3(0f, EavesHeight - 1.06f, z));
+            p.localPosition = new Vector3(0f, 0f, TrussZ(i));
+
+            // Asset_BarLamp's origin is the top of its stem, so mounting it at
+            // the chord height needs no offset. Slot 1 is its bulb, driven by
+            // the emissive bulb material rather than a painted highlight.
+            // Yaw 0, not a random angle. The lamp is radially symmetric so a
+            // random yaw changes nothing visible -- but it draws from the shared
+            // seeded _rng, which shifts every later draw in the build and
+            // silently re-rolls chair placement, clutter and bottle brands. It
+            // moved the grabbable count from 44 to 47 before this was pinned.
+            GameObject lamp = Model("Asset_BarLamp", p,
+                                    new Vector3(0f, EavesHeight, 0f), 0f,
+                                    lampBody, slotMaterials: new[] { lampBody, bulb });
+            if (lamp == null)
+            {
+                Tube("Rod", p, new Vector3(0f, EavesHeight - 0.42f, 0f), 0.035f, 0.85f, metal, Vector3.zero);
+                Tube("Shade", p, new Vector3(0f, EavesHeight - 0.95f, 0f), 0.40f, 0.20f, enamel, Vector3.zero);
+                Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.06f, 0f), 0.13f, 0.10f, bulb, Vector3.zero);
+            }
+            _pendantBulbs.Add(new Vector3(0f, EavesHeight - 1.14f, TrussZ(i)));
         }
 
         // Bare bulbs on wire, off to the sides.
@@ -2168,7 +2195,14 @@ public static class PubEnvironmentBuilder
             float z = -HalfD + 5.0f + (i / 2) * 8.5f;
             Transform p = Group(bare, "BareBulb_" + i);
             p.localPosition = new Vector3(x, 0f, z);
-            Tube("Wire", p, new Vector3(0f, EavesHeight - 0.55f, 0f), 0.012f, 1.10f, M("Mat_Pub_PosterDark"), Vector3.zero);
+
+            // The wire runs to the roof underside at THIS x, not to a fixed
+            // 3.8. The roof is pitched, so a fixed top left the wire ending in
+            // clear air below the deck -- 0.19 m of it out here at x 4.4.
+            float wireTop = RoofY(x);
+            float wireBot = EavesHeight - 1.16f + 0.06f;
+            Tube("Wire", p, new Vector3(0f, (wireTop + wireBot) * 0.5f, 0f),
+                 0.012f, wireTop - wireBot, M("Mat_Pub_PosterDark"), Vector3.zero);
             Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.16f, 0f), 0.115f, 0.16f, bulb, Vector3.zero);
             _bareBulbs.Add(new Vector3(x, EavesHeight - 1.16f, z));
         }
@@ -2528,7 +2562,18 @@ public static class PubEnvironmentBuilder
         // one spot a patient stands still and looks down at a table, where
         // contact shadows carry the scene. The rest of the hall is walked
         // through, and vertex fill reads as lit without paying for maps.
-        var shadowed = new HashSet<int> { 0 };
+        // The shadowed pendant is chosen by DISTANCE to the hero table rather
+        // than by a hard-coded index, so re-spacing the pendants -- as moving
+        // them onto the trusses just did -- cannot silently move the one
+        // shadowed light away from the one place it is there for.
+        int heroPendant = 0;
+        float heroBest = float.MaxValue;
+        for (int i = 0; i < _pendantBulbs.Count; i++)
+        {
+            float dz = Mathf.Abs(_pendantBulbs[i].z - PubScenarioBuilder.TableZ);
+            if (dz < heroBest) { heroBest = dz; heroPendant = i; }
+        }
+        var shadowed = new HashSet<int> { heroPendant };
 
         for (int i = 0; i < _pendantBulbs.Count; i++)
         {

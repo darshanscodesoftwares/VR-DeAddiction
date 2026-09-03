@@ -244,3 +244,24 @@ The doors were steel-blue frames with raised wooden panels before this. Metalnes
 and roughness maps unused; `_Metallic` is a flat 0.30, old painted sheet rather
 than bare steel.
 
+## Ceiling pendants
+
+- Files: `Assets/Models/Asset_BarLamp.fbx`, `Assets/Textures/BarLamp.png`,
+  `BarLamp_Normal.png`
+- Source: **"Bar Ceiling Light"**, downloaded as `bar-ceiling-light-2048px2`
+  (8,296 triangles as published)
+- **Licence not recorded — confirm before release.** No licence file in the
+  download.
+
+Derived by `BlenderAssets/scripts/barlamp.py`: the body and bulb meshes JOINED
+with the body active, so slot 0 is the lamp and slot 1 the bulb, letting Unity
+drive the bulb with the existing emissive material instead of a painted-on
+highlight. Decimated 8,296 -> 2,000 triangles, six of them in the hall.
+
+Its origin is the top of the stem -- the point that meets the ceiling -- so a
+lamp placed at a mount height hangs from it with no offset arithmetic. The script
+re-seats z = 0 on that point anyway, because a silent 1 cm error would hang every
+lamp wrong.
+
+Unused: Metallic and Roughness maps.
+
