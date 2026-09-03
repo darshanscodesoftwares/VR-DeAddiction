@@ -747,6 +747,30 @@ public static class PubEnvironmentBuilder
                            tiling: new Vector2(tx, ty));
     }
 
+    /// <summary>
+    /// Timber tiled to suit ONE object's real size, so grain is the same size
+    /// on the 6.6 m counter as on a 0.36 m shelf deck standing beside it.
+    ///
+    /// Takes the box's dimensions and tiles from its two LARGEST, which is the
+    /// face you actually look at. Unlike BrickWall this keeps exact fractions
+    /// rather than rounding to whole repeats: wood grain has no module to line
+    /// up, the texture is seamless, and a shelf deck 0.36 m deep genuinely
+    /// should show only a fifth of a plank.
+    /// </summary>
+    const float WoodTileMetres = 1.65f;   // a believable plank length
+
+    static Material WoodSurface(Vector3 size)
+    {
+        float[] d = { Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z) };
+        System.Array.Sort(d);
+        float tx = Mathf.Max(0.02f, d[2] / WoodTileMetres);
+        float ty = Mathf.Max(0.02f, d[1] / WoodTileMetres);
+        return MatTextured($"Mat_Pub_Wood_{tx:0.00}x{ty:0.00}",
+                           "Assets/Textures/Counter_Wood.png", 0.30f,
+                           "Assets/Textures/Counter_Wood_Normal.png",
+                           tiling: new Vector2(tx, ty));
+    }
+
     static Material MatTextured(string name, string texturePath, float smoothness,
                                 string normalPath = null, Color? tint = null,
                                 bool transparent = false, Vector2? tiling = null)
@@ -1269,7 +1293,6 @@ public static class PubEnvironmentBuilder
     static void BuildServiceArea(Transform g)
     {
         Material concrete = M("Mat_Pub_ConcreteTable");
-        Material counterWood = M("Mat_Pub_CounterWood");
         Material teal = M("Mat_Pub_GrilleTeal");
         Material wood = M("Mat_Pub_DarkWood");
         Material cooler = M("Mat_Pub_CoolerRed");
@@ -1291,19 +1314,19 @@ public static class PubEnvironmentBuilder
         // top slab. The recess is what stops it reading as a plain block: real
         // counters are stood at, so your feet go under the front edge.
         Box("Counter_Kick", g, new Vector3(cx, 0.075f, cz + 0.06f),
-            new Vector3(cw - 0.10f, 0.15f, 0.72f), counterWood, true);
+            new Vector3(cw - 0.10f, 0.15f, 0.72f), WoodSurface(new Vector3(cw - 0.10f, 0.15f, 0.72f)), true);
         Box("Counter_Base", g, new Vector3(cx, 0.60f, cz),
-            new Vector3(cw, 0.90f, 0.85f), counterWood, true);
+            new Vector3(cw, 0.90f, 0.85f), WoodSurface(new Vector3(cw, 0.90f, 0.85f)), true);
 
         // Top slab plus a chamfer strip, so the edge catches the counter light.
         Box("Counter_Top", g, new Vector3(cx, TopY, cz - 0.05f),
-            new Vector3(cw + 0.26f, 0.09f, 1.02f), counterWood, true);
+            new Vector3(cw + 0.26f, 0.09f, 1.02f), WoodSurface(new Vector3(cw + 0.26f, 0.09f, 1.02f)), true);
         Box("Counter_TopLip", g, new Vector3(cx, TopY - 0.062f, cz - 0.05f),
-            new Vector3(cw + 0.20f, 0.035f, 0.96f), counterWood);
+            new Vector3(cw + 0.20f, 0.035f, 0.96f), WoodSurface(new Vector3(cw + 0.20f, 0.035f, 0.96f)));
 
         // Customer-side drinking ledge: where glasses actually get put down.
         Box("Counter_Ledge", g, new Vector3(cx, 0.98f, cz - 0.62f),
-            new Vector3(cw + 0.10f, 0.05f, 0.26f), counterWood, true);
+            new Vector3(cw + 0.10f, 0.05f, 0.26f), WoodSurface(new Vector3(cw + 0.10f, 0.05f, 0.26f)), true);
         for (int i = 0; i < 4; i++)
         {
             Box("Counter_LedgeBracket_" + i, g,
@@ -1320,11 +1343,11 @@ public static class PubEnvironmentBuilder
         // 0.05 on each exposed side so the recess reads the same as the rest.
         Box("Counter_ReturnKick", g,
             new Vector3(cx - cw * 0.5f + 0.42f, 0.075f, cz - 1.225f),
-            new Vector3(0.75f, 0.15f, 1.85f), counterWood, true);
+            new Vector3(0.75f, 0.15f, 1.85f), WoodSurface(new Vector3(0.75f, 0.15f, 1.85f)), true);
         Box("Counter_Return", g, new Vector3(cx - cw * 0.5f + 0.42f, 0.60f, cz - 1.3f),
-            new Vector3(0.85f, 0.90f, 1.8f), counterWood, true);
+            new Vector3(0.85f, 0.90f, 1.8f), WoodSurface(new Vector3(0.85f, 0.90f, 1.8f)), true);
         Box("Counter_ReturnTop", g, new Vector3(cx - cw * 0.5f + 0.42f, TopY, cz - 1.3f),
-            new Vector3(0.95f, 0.09f, 1.9f), counterWood, true);
+            new Vector3(0.95f, 0.09f, 1.9f), WoodSurface(new Vector3(0.95f, 0.09f, 1.9f)), true);
 
         // ---- Security cage ----------------------------------------------------
         // The defining feature of a TASMAC counter: heavy mesh from the counter
@@ -1407,13 +1430,13 @@ public static class PubEnvironmentBuilder
         // Open bottle shelving against the back wall.
         Transform shelf = Group(g, "BackShelving");
         float sx = -0.6f, sz = HalfD - 0.45f, sw = 4.4f;
-        Box("Shelf_Back", shelf, new Vector3(sx, 1.15f, sz + 0.16f), new Vector3(sw, 2.3f, 0.06f), wood);
-        Box("Shelf_Side_L", shelf, new Vector3(sx - sw * 0.5f, 1.15f, sz), new Vector3(0.06f, 2.3f, 0.36f), wood);
-        Box("Shelf_Side_R", shelf, new Vector3(sx + sw * 0.5f, 1.15f, sz), new Vector3(0.06f, 2.3f, 0.36f), wood);
+        Box("Shelf_Back", shelf, new Vector3(sx, 1.15f, sz + 0.16f), new Vector3(sw, 2.3f, 0.06f), WoodSurface(new Vector3(sw, 2.3f, 0.06f)));
+        Box("Shelf_Side_L", shelf, new Vector3(sx - sw * 0.5f, 1.15f, sz), new Vector3(0.06f, 2.3f, 0.36f), WoodSurface(new Vector3(0.06f, 2.3f, 0.36f)));
+        Box("Shelf_Side_R", shelf, new Vector3(sx + sw * 0.5f, 1.15f, sz), new Vector3(0.06f, 2.3f, 0.36f), WoodSurface(new Vector3(0.06f, 2.3f, 0.36f)));
         for (int i = 0; i < 5; i++)
         {
             Box("Shelf_Deck_" + i, shelf, new Vector3(sx, 0.35f + i * 0.48f, sz),
-                new Vector3(sw, 0.05f, 0.36f), wood);
+                new Vector3(sw, 0.05f, 0.36f), WoodSurface(new Vector3(sw, 0.05f, 0.36f)));
         }
 
         // Bottles on the shelves.
