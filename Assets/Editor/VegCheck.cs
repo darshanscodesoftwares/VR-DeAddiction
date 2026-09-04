@@ -13,7 +13,7 @@ public static class VegCheck
         foreach (Transform t in Object.FindObjectsByType<Transform>(FindObjectsSortMode.None))
         {
             string n = t.name;
-            if (n != "Tree" && !n.StartsWith("Palm_") && n != "Asset_Shrub" &&
+            if (n != "Tree" && !n.StartsWith("Palm_") && n != "Asset_GroundBush" &&
                 n != "Asset_GrassTuft" && n != "Asset_GrassWeed") continue;
             if (!seen.Add(n)) continue;
 

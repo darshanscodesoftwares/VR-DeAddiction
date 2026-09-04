@@ -340,3 +340,42 @@ Tiled 2 x 1.5 from the leaf's real 1.80 x 1.50 m. Corrugation pitch now comes
 from one shared `CorrugationTileMetres` rather than a local per fixture, because
 the gate and the doors are visible from one another and must match.
 
+
+## Yard ground bushes
+
+- File: `Assets/Models/Asset_GroundBush.fbx`
+- Source: **`bush.fbx`** ("source 5"), 128,970 triangles, Open3dModel
+- **Licence not recorded — confirm before release.**
+
+Ornamental grass with dry seed heads. NOT the withdrawn `shrub.py` bush; this
+one reduces where that one could not, and the difference is the first thing to
+test on any foliage download:
+
+    shrub.fbx     31,405 tris -> floors at   4,194 (13%)   unusable, shreds
+    case_evy.fbx 766,823 tris -> floors at 420,270 (55%)   unusable at all
+    bush.fbx     128,970 tris -> reaches      2,380 (1.8%) reduces cleanly
+
+A mesh of DISCONNECTED leaf cards cannot collapse past two triangles per card;
+connected geometry can. One run establishes which you have.
+
+Reducing cleanly is not the same as looking right, and a single budget for the
+whole mesh is the wrong control. Collapse spends its cuts where collapsing is
+cheapest, which here is the LEAVES -- small separate cards, against branches that
+are connected tubes. So a uniform pass eats the foliage and keeps the twigs: at
+5,000 the result is a bare winter bush, and even at 12,000 it is a thicket.
+
+The script splits by material and reduces each on its own terms: branches 6,500
+(a tube reduced is still a tube), leaves 12,000. 18,500 total, and it reads as a
+bush. Going the other way -- branches at 2,500 -- turns them into angular shards,
+so the split is not a free lunch either. Both figures were set by rendering the
+result, which is the only thing that shows WHICH geometry survived.
+
+The source is authored in CENTIMETRES (~150 units across) and is scaled to a
+1.05 m bush rather than trusting the file. Base sits exactly on z = 0 and
+placement sinks it 0.05 m, so it cannot float.
+
+No textures ship with it, only two Max materials, so the colours are flat: the
+grass tuft texture for foliage and a dry straw tone for the seed heads.
+
+Placed corner-weighted, since growth collects where two walls meet and nobody
+sweeps. On the GroundCover layer, so the 17 m cull applies.

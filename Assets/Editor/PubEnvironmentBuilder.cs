@@ -440,6 +440,12 @@ public static class PubEnvironmentBuilder
         // Weathered brass for the exterior gooseneck lights. The model ships no
         // textures, only Maya lamberts, so this is a flat colour.
         Mat("Mat_Pub_WallLightBody", Rgb(118, 100, 66), 0.34f, 0.55f);
+        // Yard bush. Slot 0 is BRANCHES and slot 1 is LEAVES -- established by
+        // face count (slot 1 carries 79,230 of 102,289) and by UV layout, not
+        // assumed. Getting these the wrong way round painted the branches green
+        // and the leaves beige, and the bush read as a heap of dead shards.
+        Mat("Mat_Pub_BushBark", Rgb(74, 51, 33), 0.10f, 0f);
+        Mat("Mat_Pub_BushLeaf", Rgb(33, 82, 23), 0.12f, 0f);
 
         // Painted corrugated steel for the entrance doors, front and back. Same
         // albedo; the back's normal map has its X and Y negated so its ridges
@@ -3160,6 +3166,90 @@ public static class PubEnvironmentBuilder
         }
         Debug.Log($"[PubEnvironment] Trees: {trunks.Count} placed " +
                   string.Join(", ", trunks.ConvertAll(v => v.ToString("F1"))));
+
+        // ---- Ground bushes ----
+        //
+        // Corner-weighted rather than evenly scattered: rubbish and growth
+        // collect where two walls meet and nobody sweeps, so most sit near a
+        // corner and the rest fall anywhere. They are GROUND plants -- nothing
+        // is placed against a wall face, only on the dirt.
+        //
+        // 5,000 triangles each, which is where this model stops shredding
+        // (2,400 turns its leaves into angular shards). They go on the
+        // GroundCover layer so the 17 m cull applies; nine of them is 45,000
+        // triangles and only the near ones are ever drawn.
+        Material bushBark = M("Mat_Pub_BushBark");
+        Material bushLeaf = M("Mat_Pub_BushLeaf");
+        Transform bushes = Group(g, "GroundBushes");
+
+        // Three, at 40,500 triangles each.
+        //
+        // The count came down twice and the per-bush budget went up three times,
+        // and the measurements say that was the right direction: nine bushes at
+        // 5,000 held 15/21 frame windows on budget, four at 12,000 held 16/21,
+        // three at 18,500 held 18/20 -- MORE triangles each time, and better.
+        //
+        // The cost here is per-OBJECT (draw calls, culling, batching), not per
+        // triangle. So density inside a few objects is close to free while
+        // scattering many cheap ones is not, and the foliage budget is spent
+        // accordingly.
+        const int BushCount = 3;
+        const float BushCornerBias = 0.55f;     // rest land anywhere in the yard
+        var corners = new List<Vector2>
+        {
+            new Vector2(-cHW, fZ), new Vector2(cHW, fZ),      // compound corners
+            new Vector2(-cHW, bZ), new Vector2(cHW, bZ),
+            new Vector2(-bldHalfW, -bldHalfD), new Vector2(bldHalfW, -bldHalfD),
+            new Vector2(-bldHalfW,  bldHalfD), new Vector2(bldHalfW,  bldHalfD),
+        };
+
+        System.Random bushRNG = new System.Random(881204);
+        float BRand(float lo, float hi) { return lo + (float)bushRNG.NextDouble() * (hi - lo); }
+
+        var bushAt = new List<Vector3>();
+        for (int i = 0; i < BushCount; i++)
+        {
+            Vector3 p = Vector3.zero;
+            bool ok = false;
+            for (int attempt = 0; attempt < 60 && !ok; attempt++)
+            {
+                if (bushRNG.NextDouble() < BushCornerBias)
+                {
+                    Vector2 c = corners[bushRNG.Next(corners.Count)];
+                    // pull IN from the corner, never through it
+                    p = new Vector3(c.x - Mathf.Sign(c.x) * BRand(0.8f, 2.9f), GroundSink,
+                                    c.y - Mathf.Sign(c.y - cCZ) * BRand(0.8f, 2.9f));
+                }
+                else
+                {
+                    p = new Vector3(BRand(-yardX * 0.5f + 1.1f, yardX * 0.5f - 1.1f), GroundSink,
+                                    BRand(cCZ - yardZ * 0.5f + 1.1f, cCZ + yardZ * 0.5f - 1.1f));
+                }
+
+                if (Mathf.Abs(p.x) <= bldHalfW && Mathf.Abs(p.z) <= bldHalfD) continue;
+                if (Mathf.Abs(p.x) > yardX * 0.5f - 1.0f) continue;
+                if (Mathf.Abs(p.z - cCZ) > yardZ * 0.5f - 1.0f) continue;
+                if (p.z < entFrontZ && Mathf.Abs(p.x) < pathHalfW + 0.9f) continue;
+
+                ok = true;
+                foreach (Vector3 q in bushAt)
+                    if (Vector3.Distance(p, q) < 1.7f) { ok = false; break; }
+                foreach (Vector3 q in trunks)
+                    if (Vector3.Distance(p, q) < 2.2f) { ok = false; break; }
+            }
+            if (!ok) continue;
+            bushAt.Add(p);
+
+            GameObject go = Model("Asset_GroundBush", bushes, p, BRand(0f, 360f), bushBark,
+                                  slotMaterials: new[] { bushBark, bushLeaf });
+            if (go == null) continue;
+            foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>(true))
+                mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            foreach (Transform tr in go.GetComponentsInChildren<Transform>(true))
+                tr.gameObject.layer = vegLayer;
+        }
+        Debug.Log($"[PubEnvironment] Ground bushes: {bushAt.Count} placed.");
+
 
         Debug.Log($"[PubEnvironment] Ground cover: {placed} placed over {openArea:F0} m2 " +
                   $"({tufts} tufts + {weeds} weeds + {ShrubCount} shrubs requested); " +
