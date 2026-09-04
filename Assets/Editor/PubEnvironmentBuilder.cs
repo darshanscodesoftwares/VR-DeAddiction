@@ -2792,7 +2792,13 @@ public static class PubEnvironmentBuilder
             Debug.Log("[PubEnvironment] Grab clink loaded.");
     }
 
-    const string PanoramaPath = "Assets/Textures/Sky_Overcast.png";
+    // Which panorama the sky uses. BOTH files stay in the project; switching
+    // PanoramaPath back to SkyPainted is the whole revert -- no reimport, no
+    // asset to restore. PanoramaSky() also falls back to the procedural sky if
+    // whichever file is named here goes missing.
+    const string SkyPainted = "Assets/Textures/Sky_Overcast.png";   // 1774x887
+    const string SkyDayHDRI = "Assets/Textures/Sky_DayHDRI.jpg";    // 4096x2048
+    const string PanoramaPath = SkyDayHDRI;
     const string PanoMatPath = "Assets/PubEnvironment/Materials/Mat_Sky_Panorama.mat";
 
     /// <summary>
@@ -2807,10 +2813,16 @@ public static class PubEnvironmentBuilder
     /// with a visible low sun would have shadows falling straight down while
     /// the horizon said sunset.
     ///
-    /// It is low resolution (1774x887) and will be soft in a headset. That is
-    /// tolerable here only because the content is diffuse cloud with no fine
-    /// detail to lose; the same resolution on a detailed skyline would look
-    /// broken.
+    /// Now a 4096x2048 photographic panorama (ambientCG Day Sky HDRI 020 A),
+    /// replacing a 1774x887 painted one that the comment here used to concede
+    /// was soft. 4K is about 11 pixels per degree of arc against the headset's
+    /// ~19; on diffuse cloud that gap does not show, which is why 8K was not
+    /// worth four times the memory.
+    ///
+    /// Its lower hemisphere is a real FIELD, not blank cloud, so a treeline
+    /// horizon sits above the compound walls. That suits a rural bar and is
+    /// worth knowing: a panorama shot in a city would put skyline through the
+    /// same gap.
     ///
     /// Falls back to the procedural sky if the texture is ever missing, so a
     /// lost file degrades to a grey sky rather than to Unity's default blue.

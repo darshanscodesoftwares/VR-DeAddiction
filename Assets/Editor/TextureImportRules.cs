@@ -42,7 +42,13 @@ public class TextureImportRules : AssetPostprocessor
         // source resolution instead.
         bool isSky = assetPath.Contains("Sky_");
 
-        importer.maxTextureSize = isSky ? 2048 : MaxSize;
+        // 4096 for the sky. A 360 panorama spreads its width over the whole
+        // horizon, so 2048 is about 5.7 pixels per degree of arc against the
+        // headset's ~19 -- visibly soft. 4096 doubles that for roughly 8 MB in
+        // ASTC HQ without mipmaps, which is nothing on this device. Beyond 4096
+        // the gain is real only for a detailed skyline; on diffuse cloud it is
+        // memory spent on nothing.
+        importer.maxTextureSize = isSky ? 4096 : MaxSize;
 
         // A 360 sky is a large, smooth gradient, which is the worst case for
         // block compression: standard ASTC bands it into visible tiles across

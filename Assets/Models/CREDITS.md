@@ -379,3 +379,31 @@ grass tuft texture for foliage and a dry straw tone for the seed heads.
 
 Placed corner-weighted, since growth collects where two walls meet and nobody
 sweeps. On the GroundCover layer, so the 17 m cull applies.
+
+## Sky panorama
+
+- File: `Assets/Textures/Sky_DayHDRI.jpg` (4096 x 2048)
+- Source: **ambientCG "Day Sky HDRI 020 A"** —
+  https://ambientcg.com/a/DaySkyHDRI020A
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+The 4K TONEMAPPED jpg from the download, used as shipped. The .exr is not used:
+a floating-point skybox costs several times the memory on mobile for no visible
+gain once it is tone-mapped to the display anyway.
+
+4K rather than 8K/12K/16K. A 360 panorama spreads its width over the whole
+horizon, so 4096 is about 11 pixels per degree of arc against the headset's ~19.
+On diffuse cloud that gap does not show; a detailed skyline would need more.
+`TextureImportRules` previously capped sky textures at 2048 (5.7 px/degree) and
+now allows 4096 -- roughly 8 MB in ASTC HQ with no mipmaps.
+
+No sun disc, which matters: the directional light sits at 84 degrees overhead,
+and a panorama with a visible low sun would put shadows straight down while the
+horizon said sunset.
+
+Its lower hemisphere is a real field with a treeline, not blank cloud, so a
+horizon shows above the 2.4 m compound walls.
+
+The previous painted sky (`Sky_Overcast.png`, 1774x887) is KEPT. Reverting is
+one constant: `PanoramaPath = SkyPainted`.
+
