@@ -313,7 +313,7 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_ChairGreen", Rgb(58, 158, 62), 0.55f, 0f);
 
         // Service area --------------------------------------------------------
-        Mat("Mat_Pub_GrilleTeal", Rgb(78, 168, 174), 0.42f, 0.30f);
+Mat("Mat_Pub_GrilleTeal", Rgb(78, 168, 174), 0.42f, 0.30f);
         Mat("Mat_Pub_CoolerRed", Rgb(176, 32, 34), 0.48f, 0.10f);
         Mat("Mat_Pub_DarkWood", Rgb(64, 44, 32), 0.22f, 0f);
         MatTransparent("Mat_Pub_GlassClear", new Color(0.78f, 0.85f, 0.86f, 0.28f), 0.92f);
@@ -2493,49 +2493,6 @@ public static class PubEnvironmentBuilder
 
         PointLight(g, "Lamp_Counter_Shelf", new Vector3(-1.4f, 2.35f, HalfD - 2.3f),
                    new Color(1f, 0.88f, 0.68f), 1.35f, 6.0f);
-
-        // ---- Failing lights ----
-        //
-        // These were the two wall tubes, which have since been removed along
-        // with everything else on the side walls. The FLICKER survives on two
-        // ceiling pendants instead, because it was asked for separately from
-        // the clearing -- losing it would have been a side effect rather than a
-        // decision. Say the word and it goes.
-        //
-        // Same component and the same clip as the TASMAC board outside, so the
-        // interior fault reads as the same tired wiring. The light is driven by
-        // the SOUND's own amplitude envelope, so pop and flash are one event;
-        // see FlickeringLamp.
-        //
-        // No glow renderer here: a pendant's bulb is one material SLOT on a
-        // shared mesh, so making it glow would light every pendant in the hall.
-        // The light alone carries it.
-        AudioClip flickerClip = AssetDatabase.LoadAssetAtPath<AudioClip>(
-            "Assets/Audio/Sign/FluorescentFlicker.wav");
-        float[] flickerEnv = BuildEnvelope(flickerClip, 60f);
-
-        // Front and back of the hall, so one is visible from most of the room.
-        foreach (int idx in new[] { 1, 4 })
-        {
-            Transform pend = g.Find("Lamp_Pendant_F" + idx);
-            if (pend == null)
-            {
-                Debug.LogWarning($"[PubEnvironment] Lamp_Pendant_F{idx} not found; " +
-                                 "no flicker on it.");
-                continue;
-            }
-            var lamp = pend.gameObject.AddComponent<FlickeringLamp>();
-            lamp.TargetLight = pend.GetComponent<Light>();
-            lamp.GlowRenderer = null;
-            lamp.PeakIntensity = 2.0f;
-            lamp.Floor = 0.12f;
-            lamp.Volume = 0.16f;
-            lamp.MaxDistance = 9f;
-            lamp.Clip = flickerClip;
-            lamp.EnvelopeHz = 60f;
-            lamp.Envelope = flickerEnv;
-            Debug.Log($"[PubEnvironment] Flickering pendant: {pend.name}");
-        }
 
         // Doorway spill only: the doors are open, but this must not light the hall.
         // Doorway spill: with the sun overhead almost nothing comes through the
