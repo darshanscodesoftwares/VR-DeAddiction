@@ -444,6 +444,8 @@ public static class PubEnvironmentBuilder
         // face count (slot 1 carries 79,230 of 102,289) and by UV layout, not
         // assumed. Getting these the wrong way round painted the branches green
         // and the leaves beige, and the bush read as a heap of dead shards.
+        // Ceiling fan body -- the model ships every material as default grey.
+        Mat("Mat_Pub_FanBody", Rgb(228, 226, 219), 0.35f, 0.25f);
         Mat("Mat_Pub_BushBark", Rgb(74, 51, 33), 0.10f, 0f);
         Mat("Mat_Pub_BushLeaf", Rgb(33, 82, 23), 0.12f, 0f);
 
@@ -2154,11 +2156,54 @@ public static class PubEnvironmentBuilder
 
         // Ceiling fans hung off the trusses.
         Transform fans = Group(g, "Fans");
+        Material fanBody  = M("Mat_Pub_FanBody");
         for (int i = 0; i < TrussCount; i++)
         {
             float x = (i % 2 == 0) ? -3.0f : 3.0f;
-            Fan(fans, "Fan_" + i, new Vector3(x, EavesHeight, TrussZ(i)),
-                steel, blade, Rand(0f, 90f));
+            GameObject go = Model("Asset_CeilingFan", fans,
+                                  new Vector3(x, EavesHeight, TrussZ(i)),
+                                  // Rand, not a computed angle. The old primitive
+                                  // fan drew Rand(0, 90) here; dropping that draw
+                                  // shifts every later one in the shared seeded
+                                  // _rng and silently re-rolled the scenario --
+                                  // grabbable props went 44 to 40. Same trap the
+                                  // ceiling lamps hit.
+                                  Rand(0f, 90f), fanBody);
+            if (go == null)
+            {
+                Fan(fans, "Fan_" + i, new Vector3(x, EavesHeight, TrussZ(i)),
+                    steel, blade, 0f);
+                continue;
+            }
+            go.name = "Fan_" + i;
+
+            foreach (MeshRenderer mr in go.GetComponentsInChildren<MeshRenderer>(true))
+            {
+                bool isBlade = mr.name.Contains("Blade");
+                Material m = isBlade ? blade : fanBody;
+                Material[] slots = new Material[mr.sharedMaterials.Length];
+                for (int k = 0; k < slots.Length; k++)
+                    slots[k] = m;
+                mr.sharedMaterials = slots;
+
+                if (!isBlade)
+                    continue;
+
+                // The blades spin, so nothing in this fan may be static.
+                //
+                // Marking only the BLADES non-static is not enough: they sit
+                // under a static parent chain, and Unity bakes static hierarchies
+                // at build time, so the child's rotation had nowhere to land.
+                // A fan is 1,148 triangles; giving up static batching on six of
+                // them costs less than the bug did.
+                for (Transform up = mr.transform; up != null; up = up.parent)
+                {
+                    up.gameObject.isStatic = false;
+                    if (up == go.transform)
+                        break;
+                }
+                mr.gameObject.AddComponent<FanSpinner>();
+            }
         }
 
         // Pendants down the centre, ONE PER TRUSS.
