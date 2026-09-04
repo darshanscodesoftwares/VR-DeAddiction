@@ -27,6 +27,12 @@ public static class PubEnvironmentBuilder
     const float HallDepth = 20f;
     const float EavesHeight = 3.8f;   // underside of truss bottom chord
     const float RidgeRise = 0.7f;     // shallow pitch, as in the references
+
+    // Metres of wall per repeat of the corrugated-sheet textures. Shared by the
+    // entrance doors and the compound gate so both sheets have the same
+    // corrugation pitch -- they are visible from one another.
+    const float CorrugationTileMetres = 1.0f;
+
     // The building's entrance opening. Constants rather than locals so anything
     // built elsewhere in the yard can keep clear of the doorway without
     // restating its size.
@@ -100,6 +106,7 @@ public static class PubEnvironmentBuilder
     /// the shadows came from empty air between them.
     /// </summary>
     static List<Vector3> _pendantBulbs;
+
     static List<Vector3> _bareBulbs;
     static int _objectCount;
     static int _triangleCount;
@@ -447,6 +454,21 @@ public static class PubEnvironmentBuilder
                                           : "Assets/Textures/DoorSteel_Normal.png");
             dm.SetFloat("_Metallic", 0.30f);
             EditorUtility.SetDirty(dm);
+        }
+
+        // Corrugated steel for the compound gate leaves. CorrugatedSteel007A is
+        // clean blue paint with rust only around the rivet heads, against the
+        // doors' heavily rusted 007B -- so the gate reads as the newer sheet,
+        // which is the usual way round for a compound that is locked at night.
+        // Same front/back pairing as the doors, and for the same reason.
+        foreach (string gn in new[] { "Mat_Pub_GateSteel", "Mat_Pub_GateSteelBack" })
+        {
+            Material gm = MatTextured(gn, "Assets/Textures/GateSteel.png", 0.34f,
+                                      gn.EndsWith("Back")
+                                          ? "Assets/Textures/GateSteel_NormalBack.png"
+                                          : "Assets/Textures/GateSteel_Normal.png");
+            gm.SetFloat("_Metallic", 0.30f);
+            EditorUtility.SetDirty(gm);
         }
 
         // Asphalt: low smoothness, but not zero -- a road is not chalk.
@@ -1176,7 +1198,6 @@ public static class PubEnvironmentBuilder
         Material doorBack  = M("Mat_Pub_DoorSteelBack");
         float doorLeafW = entW * 0.5f - 0.08f;
         float doorLeafH = entH - 0.06f;
-        const float CorrugationTileMetres = 1.0f;
         Vector2 doorTile = new Vector2(
             Mathf.Max(1f, Mathf.Round(doorLeafW / CorrugationTileMetres)),
             doorLeafH / CorrugationTileMetres);
@@ -3353,10 +3374,28 @@ public static class PubEnvironmentBuilder
                  (signH - 0.40f) * 0.62f,
                  M("Mat_Pub_SignboardText"));
 
-        // ---- Gate leaves (half-height wooden, slightly ajar) ----
+        // ---- Gate leaves (half-height corrugated steel, slightly ajar) ----
+        //
+        // Same construction as the entrance doors: a leaf slab carrying the
+        // front sheet plus a thin skin on its reverse carrying the INVERTED
+        // normal map, because a box has one material and the back of a
+        // corrugated sheet is the negative of its front. See back_normal.py.
+        //
+        // Tiled from the leaf's real size at 1 m a repeat. The across count is
+        // rounded to a whole number so a corrugation is never cut in half at
+        // the leaf's edge.
         Transform leaves = Group(g, "GateLeaves");
         float leafW = GateOpeningW * 0.5f - 0.10f;
         float leafH = 1.5f;
+
+        Material gateFront = M("Mat_Pub_GateSteel");
+        Material gateBack  = M("Mat_Pub_GateSteelBack");
+        Vector2 gateTile = new Vector2(
+            Mathf.Max(1f, Mathf.Round(leafW / CorrugationTileMetres)),
+            leafH / CorrugationTileMetres);
+        Tile(gateFront, gateTile);
+        Tile(gateBack, gateTile);
+        const float gateSkinT = 0.010f;
 
         // Left leaf - hinged on left post, swung ~20 deg open
         Transform leafL = Group(leaves, "Leaf_L");
@@ -3364,10 +3403,11 @@ public static class PubEnvironmentBuilder
         leafL.localEulerAngles = new Vector3(0f, -90f, 0f);
         Box("Frame_L", leafL,
             new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f, 0f),
-            new Vector3(leafW, leafH, 0.045f), steel);
-        Box("Fill_L", leafL,
-            new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f, -0.016f),
-            new Vector3(leafW - 0.08f, leafH - 0.10f, 0.025f), gateWood);
+            new Vector3(leafW, leafH, 0.045f), gateFront);
+        Box("Skin_L", leafL,
+            new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f,
+                        -(0.0225f + gateSkinT * 0.5f)),
+            new Vector3(leafW, leafH, gateSkinT), gateBack);
 
         // Right leaf - hinged on right post, swung ~20 deg open
         Transform leafR = Group(leaves, "Leaf_R");
@@ -3375,10 +3415,11 @@ public static class PubEnvironmentBuilder
         leafR.localEulerAngles = new Vector3(0f, 90f, 0f);
         Box("Frame_R", leafR,
             new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f, 0f),
-            new Vector3(leafW, leafH, 0.045f), steel);
-        Box("Fill_R", leafR,
-            new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f, -0.015f),
-            new Vector3(leafW - 0.08f, leafH - 0.10f, 0.025f), gateWood);
+            new Vector3(leafW, leafH, 0.045f), gateFront);
+        Box("Skin_R", leafR,
+            new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f,
+                        -(0.0225f + gateSkinT * 0.5f)),
+            new Vector3(leafW, leafH, gateSkinT), gateBack);
 
         // ---- Utility pole ----
         Transform utilPole = Group(g, "UtilityPole");
