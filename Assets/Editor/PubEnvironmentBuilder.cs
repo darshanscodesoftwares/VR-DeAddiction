@@ -27,6 +27,11 @@ public static class PubEnvironmentBuilder
     const float HallDepth = 20f;
     const float EavesHeight = 3.8f;   // underside of truss bottom chord
     const float RidgeRise = 0.7f;     // shallow pitch, as in the references
+    // The building's entrance opening. Constants rather than locals so anything
+    // built elsewhere in the yard can keep clear of the doorway without
+    // restating its size.
+    const float EntranceW = 4.2f;
+    const float EntranceH = 2.6f;
     const float WallThickness = 0.25f;
     const float DadoHeight = 1.10f;   // painted lower band on the walls
 
@@ -1134,7 +1139,7 @@ public static class PubEnvironmentBuilder
             new Vector3(outerW, wallH, t), BrickWall(outerW, wallH), true);
 
         // Front wall (-Z) with the wide open entrance.
-        float entW = 4.2f, entH = 2.6f;
+        float entW = EntranceW, entH = EntranceH;
         float frontZ = -HalfD - t * 0.5f;
         float fSegW = (HalfW + t) - entW * 0.5f;
         Box("Wall_Front_Left", g,
@@ -1229,133 +1234,7 @@ public static class PubEnvironmentBuilder
             Box("Pier_R_" + i, g, new Vector3(HalfW - 0.06f, wallH * 0.5f, z),
                 new Vector3(0.12f, wallH, 0.5f), BrickWall(0.5f, wallH));
         }
-
-        // High ventilation windows with metal grilles.
-        Transform win = Group(g, "Windows");
-        for (int i = 0; i < 3; i++)
-        {
-            float z = -4.5f + i * 5f;
-            BuildWindow(win, "Window_R_" + i, new Vector3(HalfW - 0.05f, 2.85f, z), true);
-        }
-        BuildWindow(win, "Window_L_0", new Vector3(-HalfW + 0.05f, 2.85f, 3.5f), false);
     }
-
-    static void BuildGable(Transform g, string name, float z, Material mat)
-    {
-        Transform gg = Group(g, name);
-        const int steps = 4;
-        for (int i = 0; i < steps; i++)
-        {
-            float x0 = -HalfW + i * (HalfW / steps);
-            float x1 = -HalfW + (i + 1) * (HalfW / steps);
-            float h = RoofY((x0 + x1) * 0.5f) - EavesHeight;
-            if (h <= 0.01f) continue;
-            float w = x1 - x0;
-            Box(name + "_L" + i, gg, new Vector3((x0 + x1) * 0.5f, EavesHeight + h * 0.5f, z),
-                new Vector3(w, h, WallThickness), mat);
-            Box(name + "_R" + i, gg, new Vector3(-(x0 + x1) * 0.5f, EavesHeight + h * 0.5f, z),
-                new Vector3(w, h, WallThickness), mat);
-        }
-    }
-
-    static void BuildWindow(Transform g, string name, Vector3 pos, bool rightWall)
-    {
-        Transform w = Group(g, name);
-        float sx = rightWall ? -0.04f : 0.04f;
-        Box(name + "_Recess", w, pos + new Vector3(sx, 0f, 0f),
-            new Vector3(0.06f, 0.7f, 1.2f), M("Mat_Pub_PosterDark"));
-        for (int i = 0; i < 5; i++)
-        {
-            Box(name + "_Bar" + i, w, pos + new Vector3(sx * 1.6f, -0.28f + i * 0.14f, 0f),
-                new Vector3(0.05f, 0.035f, 1.2f), M("Mat_Pub_Metal"));
-        }
-    }
-
-    // --------------------------------------------------------- roof structure
-
-    static void BuildRoofStructure(Transform g)
-    {
-        Material steel = M("Mat_Pub_SteelBlue");
-        Material sheet = M("Mat_Pub_RoofSheet");
-        Material sky = M("Mat_Pub_Skylight");
-
-        Transform trusses = Group(g, "Trusses");
-        Transform pillars = Group(g, "Pillars");
-        Transform purlins = Group(g, "Purlins");
-        Transform panels = Group(g, "RoofPanels");
-        Transform ribs = Group(g, "Corrugation");
-
-        for (int i = 0; i < TrussCount; i++)
-        {
-            float z = TrussZ(i);
-            BuildTruss(trusses, "Truss_" + i, z, steel);
-
-            Box("Pillar_L_" + i, pillars, new Vector3(-HalfW + 0.12f, EavesHeight * 0.5f, z),
-                new Vector3(0.22f, EavesHeight, 0.22f), steel, true);
-            Box("Pillar_R_" + i, pillars, new Vector3(HalfW - 0.12f, EavesHeight * 0.5f, z),
-                new Vector3(0.22f, EavesHeight, 0.22f), steel, true);
-        }
-
-        // Purlins running the length of the hall.
-        for (int i = 0; i <= 6; i++)
-        {
-            float x = -HalfW + i * (HallWidth / 6f);
-            // Sits on the truss top chord, under the ribs and sheeting.
-            Box("Purlin_" + i, purlins, new Vector3(x, RoofY(x) + 0.045f, 0f),
-                new Vector3(0.09f, 0.09f, HallDepth + 0.6f), steel);
-        }
-
-        // Roof sheeting, split along Z so some bays can be translucent skylights.
-        const int segs = 8;
-        float segLen = (HallDepth + 0.6f) / segs;
-        float slopeLen = Mathf.Sqrt(HalfW * HalfW + RidgeRise * RidgeRise) + 0.35f;
-        float slopeAng = Mathf.Atan2(RidgeRise, HalfW) * Mathf.Rad2Deg;
-
-        for (int side = 0; side < 2; side++)
-        {
-            float sign = side == 0 ? -1f : 1f;
-            for (int i = 0; i < segs; i++)
-            {
-                float z = -(HallDepth + 0.6f) * 0.5f + segLen * (i + 0.5f);
-                // Roof closed: the interior is lit by its bulbs, not by daylight
-                // through the roof. Flip RoofSkylights to restore the open bays.
-                bool skylight = RoofSkylights && (i == 2 || i == 5);
-                // Alternate panels sit slightly proud, so a lapped pair is
-                // never coplanar. Overlapping them at the SAME height made the
-                // overlap z-fight -- the depth buffer cannot order two faces in
-                // the same plane, so they flicker. Real sheets lap over each
-                // other anyway, so this is also what the roof should look like.
-                float lap = (i % 2 == 0) ? 0f : 0.045f;
-
-                Box("Roof_" + (side == 0 ? "L" : "R") + "_" + i, panels,
-                    new Vector3(sign * HalfW * 0.5f,
-                                EavesHeight + RidgeRise * 0.5f + 0.17f + lap, z),
-                    // 1.10, not 0.98. At 98 % each panel fell 2 % short of its
-                    // segment, leaving a ~5 cm slot between all 8 panels per
-                    // side -- the dashed lines of sunlight across the floor.
-                    // Real corrugated sheets overlap; these now do too.
-                    new Vector3(slopeLen, 0.06f, segLen * 1.06f),
-                    skylight ? sky : sheet)
-                    .transform.localEulerAngles = new Vector3(0f, 0f, sign * -slopeAng);
-            }
-        }
-
-        // Corrugation ribs on the underside, running down the slope.
-        int ribCount = Mathf.Max(1, Mathf.RoundToInt((HallDepth + 0.6f) / RoofRibSpacing));
-        for (int side = 0; side < 2; side++)
-        {
-            float sign = side == 0 ? -1f : 1f;
-            for (int i = 0; i < ribCount; i++)
-            {
-                float z = -(HallDepth + 0.6f) * 0.5f + RoofRibSpacing * (i + 0.5f);
-                BoxR("Rib_" + (side == 0 ? "L" : "R") + "_" + i, ribs,
-                     new Vector3(sign * HalfW * 0.5f, EavesHeight + RidgeRise * 0.5f + 0.11f, z),
-                     new Vector3(slopeLen, 0.045f, 0.07f), sheet,
-                     new Vector3(0f, 0f, sign * -slopeAng));
-            }
-        }
-    }
-
     static void BuildTruss(Transform parent, string name, float z, Material steel)
     {
         Transform t = Group(parent, name);
@@ -2262,36 +2141,6 @@ public static class PubEnvironmentBuilder
             _pendantBulbs.Add(new Vector3(0f, EavesHeight - 1.14f, TrussZ(i)));
         }
 
-        // Bare bulbs on wire, off to the sides.
-        Transform bare = Group(g, "BareBulbs");
-        for (int i = 0; i < 4; i++)
-        {
-            float x = (i % 2 == 0) ? -4.4f : 4.4f;
-            float z = -HalfD + 5.0f + (i / 2) * 8.5f;
-            Transform p = Group(bare, "BareBulb_" + i);
-            p.localPosition = new Vector3(x, 0f, z);
-
-            // The wire runs to the roof underside at THIS x, not to a fixed
-            // 3.8. The roof is pitched, so a fixed top left the wire ending in
-            // clear air below the deck -- 0.19 m of it out here at x 4.4.
-            float wireTop = RoofY(x);
-            float wireBot = EavesHeight - 1.16f + 0.06f;
-            Tube("Wire", p, new Vector3(0f, (wireTop + wireBot) * 0.5f, 0f),
-                 0.012f, wireTop - wireBot, M("Mat_Pub_PosterDark"), Vector3.zero);
-            Tube("Bulb", p, new Vector3(0f, EavesHeight - 1.16f, 0f), 0.115f, 0.16f, bulb, Vector3.zero);
-            _bareBulbs.Add(new Vector3(x, EavesHeight - 1.16f, z));
-        }
-
-        // Tube lights on the walls.
-        Transform tubes = Group(g, "TubeLights");
-        for (int i = 0; i < 6; i++)
-        {
-            float side = (i % 2 == 0) ? -1f : 1f;
-            float z = -HalfD + 4.0f + (i / 2) * 6.4f;
-            Box("Tube_" + i, tubes, new Vector3(side * (HalfW - 0.22f), 3.35f, z),
-                new Vector3(0.09f, 0.09f, 1.25f), tube);
-        }
-
         // Exposed conduit and pipe runs.
         Transform cond = Group(g, "Conduit");
         for (int i = 0; i < 2; i++)
@@ -2378,164 +2227,12 @@ public static class PubEnvironmentBuilder
                 new Vector3(0.03f, 0.05f, 3.0f), warm);
         }
 
-        // Framed posters at eye level.
-        Transform fr = Group(g, "FramedPosters");
-        for (int i = 0; i < 5; i++)
-        {
-            float side = (i % 2 == 0) ? -1f : 1f;
-            float z = -HalfD + 5.5f + i * 2.7f;
-            Box("Poster_" + i + "_Frame", fr, new Vector3(side * (HalfW - 0.05f), 2.05f, z),
-                new Vector3(0.05f, 0.86f, 0.62f), dark);
-            Box("Poster_" + i + "_Sheet", fr, new Vector3(side * (HalfW - 0.09f), 2.05f, z),
-                new Vector3(0.03f, 0.76f, 0.52f), (i % 2 == 0) ? warm : cream);
-        }
-
         // Menu board near the counter.
         Box("MenuBoard", g, new Vector3(-2.4f, 2.35f, HalfD - 0.06f),
             new Vector3(1.6f, 1.05f, 0.05f), green);
         Box("MenuBoard_Panel", g, new Vector3(-2.4f, 2.35f, HalfD - 0.10f),
             new Vector3(1.42f, 0.88f, 0.03f), cream);
-
-        // Small framed pictures high in the corners, as in the references.
-        Transform pic = Group(g, "SmallPictures");
-        Box("Pic_0_Frame", pic, new Vector3(-HalfW + 0.05f, 3.15f, HalfD - 1.2f),
-            new Vector3(0.05f, 0.42f, 0.32f), warm);
-        Box("Pic_0_Sheet", pic, new Vector3(-HalfW + 0.09f, 3.15f, HalfD - 1.2f),
-            new Vector3(0.03f, 0.34f, 0.25f), cream);
-        Box("Pic_1_Frame", pic, new Vector3(HalfW - 0.05f, 3.20f, HalfD - 3.0f),
-            new Vector3(0.05f, 0.40f, 0.30f), warm);
-        Box("Pic_1_Sheet", pic, new Vector3(HalfW - 0.09f, 3.20f, HalfD - 3.0f),
-            new Vector3(0.03f, 0.32f, 0.23f), cream);
     }
-
-    // ---------------------------------------------------------------- clutter
-
-    static void BuildClutter(Transform g)
-    {
-        Material caseMat = M("Mat_Pub_WaterCase");
-        Material crate = M("Mat_Pub_CrateGreen");
-        Material litter = M("Mat_Pub_Litter");
-        Material amber = M("Mat_Pub_GlassAmber");
-        Material green = M("Mat_Pub_GlassGreen");
-
-        // Cardboard cartons of stock against both side walls.
-        //
-        // This used to be 9 columns up to 4 high on the left plus 4 columns of 2
-        // on the right -- as many as 44 flat-shaded cubes forming a wall of
-        // filler that read as scenery geometry rather than as goods. Now four on
-        // the left and three on the right, from a real model.
-        //
-        // Asset_CardboardBox has its origin at the centre of its BASE, so a box
-        // placed at y = 0 rests on the floor and a stacked one sits at exactly
-        // one box height. No half-buried boxes to hand-correct.
-        Transform cases = Group(g, "WaterCases");
-        Material carton = M("Mat_Pub_CardboardBox");
-        const float boxH = 0.55f;
-
-        Vector3[] cartons =
-        {
-            new Vector3(-HalfW + 0.42f, 0f,        HalfD - 2.20f),   // left, stacked pair
-            new Vector3(-HalfW + 0.42f, boxH,      HalfD - 2.20f),
-            new Vector3(-HalfW + 0.44f, 0f,        HalfD - 2.86f),   // left, stacked pair
-            new Vector3(-HalfW + 0.44f, boxH,      HalfD - 2.86f),
-            new Vector3(HalfW - 0.45f,  0f,        HalfD - 2.60f),   // right, stacked pair
-            new Vector3(HalfW - 0.45f,  boxH,      HalfD - 2.60f),
-            new Vector3(HalfW - 0.47f,  0f,        HalfD - 3.26f),   // right, single
-        };
-
-        for (int i = 0; i < cartons.Length; i++)
-        {
-            // A few degrees of yaw so a stack looks set down rather than placed.
-            GameObject box = Model("Asset_CardboardBox", cases, cartons[i],
-                                   Rand(-7f, 7f), carton);
-            if (box != null)
-                box.name = "Carton_" + i;
-            else
-                Box("Case_" + i, cases, cartons[i] + new Vector3(0f, boxH * 0.5f, 0f),
-                    new Vector3(0.55f, boxH, 0.55f), caseMat);
-        }
-
-        // Green crates by the counter.
-        //
-        // Clear of COUNTER_RETURN, the counter's left wing, which spans
-        // x -1.405 to -0.555 and z 5.4 to 7.2. The crates used to start at
-        // x = -1.4, so both columns stood inside it -- a crate half sunk into
-        // the counter, which is what that green box wedged in the corner was.
-        // A crate is 0.60 wide, so its right edge must stay left of -1.405:
-        // -2.60 and -1.94 both clear it, and they are still against the wing.
-        Transform crates = Group(g, "Crates");
-        for (int i = 0; i < 4; i++)
-        {
-            Vector3 p = new Vector3(-2.60f + (i % 2) * 0.66f, 0.155f + (i / 2) * 0.31f, HalfD - 3.5f);
-            Crate(crates, "Crate_" + i, p, crate, Rand(-6f, 6f));
-        }
-
-        // Bottles and glasses, placed ON real tables rather than scattered at
-        // table height (which would leave them floating in the walkways).
-        Transform loose = Group(g, "TableClutter");
-        int b = 0, gl = 0;
-        for (int i = 0; i < _tableTops.Count; i++)
-        {
-            Vector3 top = _tableTops[i];
-            if (_rng.NextDouble() < 0.35) continue;      // leave some tables clear
-
-            // Positions are sampled inside a CIRCLE now.
-            //
-            // They used to come from a +/-0.42 x +/-0.26 rectangle, which fitted
-            // the old 1.10 x 0.76 table. Against a disc of radius 0.367 a corner
-            // sample lands at r = 0.50 -- past the rim, in mid-air -- so on the
-            // first physics step it dropped to the floor. That is why the room
-            // filled with fallen bottles.
-            //
-            // 0.30 m of usable radius leaves room for the widest prop (0.045)
-            // plus a margin before the edge.
-            var placed = new List<Vector2>();
-
-            int bottles = RandInt(1, 4);
-            for (int j = 0; j < bottles; j++)
-            {
-                Vector3 p = top + OnTable(placed, 0.30f, 0.12f);
-                Bottle(loose, "TBottle_" + (b++), p, (j % 2 == 0) ? amber : green, 0.95f, true);
-            }
-            int glasses = RandInt(1, 3);
-            for (int j = 0; j < glasses; j++)
-            {
-                Vector3 p = top + OnTable(placed, 0.30f, 0.10f) + Vector3.up * 0.045f;
-                Transform gGroup = Group(loose, "Glass_" + (gl++));
-                gGroup.localPosition = p;
-
-                // Alternate glass tumblers and steel tumblers, as in the photos.
-                string gModel = (gl % 2 == 0) ? "Asset_Glass" : "Asset_SteelTumbler";
-                Material gMat = (gl % 2 == 0) ? litter : M("Mat_Pub_Metal");
-
-                if (Model(gModel, gGroup, Vector3.zero, Rand(0f, 360f), gMat,
-                          isStatic: false) == null)
-                {
-                    Tube("Glass_Body", gGroup, Vector3.zero, 0.065f, 0.10f, litter, Vector3.zero);
-                }
-
-                GrabbableUpright(gGroup, 0.040f, 0.10f, 0.25f);
-            }
-        }
-
-        Transform floorJunk = Group(g, "FloorLitter");
-        for (int i = 0; i < 10; i++)
-        {
-            float x = Rand(-HalfW + 1.2f, HalfW - 1.2f);
-            float z = Rand(-HalfD + 1.5f, HalfD - 4.5f);
-            BoxR("Litter_" + i, floorJunk, new Vector3(x, 0.006f, z),
-                 new Vector3(Rand(0.08f, 0.22f), 0.012f, Rand(0.08f, 0.20f)), litter,
-                 new Vector3(0f, Rand(0f, 180f), 0f));
-        }
-
-        // A couple of loose bottles on the floor.
-        for (int i = 0; i < 3; i++)
-        {
-            Bottle(floorJunk, "FloorBottle_" + i,
-                   new Vector3(Rand(-4f, 4f), 0.04f, Rand(-6f, 6f)), green, 0.95f, true);
-        }
-    }
-
     static void Crate(Transform parent, string name, Vector3 pos, Material mat, float yaw)
     {
         Transform c = Group(parent, name);
@@ -2676,15 +2373,6 @@ public static class PubEnvironmentBuilder
         // where a patient actually stands.
         Downlight(g, "Lamp_Counter", new Vector3(1.9f, 2.7f, HalfD - 2.0f),
                   new Color(1f, 0.905f, 0.735f), 2.55f, 6.8f, castShadows: false);
-
-        // The bare bulbs down each side were pure geometry -- lamps that gave
-        // off nothing. A vertex light at each costs almost nothing and stops
-        // the side aisles reading as unlit.
-        for (int i = 0; i < _bareBulbs.Count; i++)
-        {
-            PointLight(g, "Lamp_BareBulb_" + i, _bareBulbs[i],
-                       new Color(1f, 0.90f, 0.70f), 1.15f, 5.5f);
-        }
 
         // Vertex fill: side rows, so the outer tables and walls are not black.
         for (int i = 0; i < 3; i++)
@@ -3802,5 +3490,235 @@ public static class PubEnvironmentBuilder
         _objectCount += 2;
 
         Debug.Log("[PubEnvironment] Player spawned near entrance.");
+    }
+
+
+    static void BuildRoofStructure(Transform g)
+    {
+        Material steel = M("Mat_Pub_SteelBlue");
+        Material sheet = M("Mat_Pub_RoofSheet");
+        Material sky = M("Mat_Pub_Skylight");
+
+        Transform trusses = Group(g, "Trusses");
+        Transform pillars = Group(g, "Pillars");
+        Transform purlins = Group(g, "Purlins");
+        Transform panels = Group(g, "RoofPanels");
+        Transform ribs = Group(g, "Corrugation");
+
+        for (int i = 0; i < TrussCount; i++)
+        {
+            float z = TrussZ(i);
+            BuildTruss(trusses, "Truss_" + i, z, steel);
+
+            Box("Pillar_L_" + i, pillars, new Vector3(-HalfW + 0.12f, EavesHeight * 0.5f, z),
+                new Vector3(0.22f, EavesHeight, 0.22f), steel, true);
+            Box("Pillar_R_" + i, pillars, new Vector3(HalfW - 0.12f, EavesHeight * 0.5f, z),
+                new Vector3(0.22f, EavesHeight, 0.22f), steel, true);
+        }
+
+        // Purlins running the length of the hall.
+        for (int i = 0; i <= 6; i++)
+        {
+            float x = -HalfW + i * (HallWidth / 6f);
+            // Sits on the truss top chord, under the ribs and sheeting.
+            Box("Purlin_" + i, purlins, new Vector3(x, RoofY(x) + 0.045f, 0f),
+                new Vector3(0.09f, 0.09f, HallDepth + 0.6f), steel);
+        }
+
+        // Roof sheeting, split along Z so some bays can be translucent skylights.
+        const int segs = 8;
+        float segLen = (HallDepth + 0.6f) / segs;
+        float slopeLen = Mathf.Sqrt(HalfW * HalfW + RidgeRise * RidgeRise) + 0.35f;
+        float slopeAng = Mathf.Atan2(RidgeRise, HalfW) * Mathf.Rad2Deg;
+
+        for (int side = 0; side < 2; side++)
+        {
+            float sign = side == 0 ? -1f : 1f;
+            for (int i = 0; i < segs; i++)
+            {
+                float z = -(HallDepth + 0.6f) * 0.5f + segLen * (i + 0.5f);
+                // Roof closed: the interior is lit by its bulbs, not by daylight
+                // through the roof. Flip RoofSkylights to restore the open bays.
+                bool skylight = RoofSkylights && (i == 2 || i == 5);
+                // Alternate panels sit slightly proud, so a lapped pair is
+                // never coplanar. Overlapping them at the SAME height made the
+                // overlap z-fight -- the depth buffer cannot order two faces in
+                // the same plane, so they flicker. Real sheets lap over each
+                // other anyway, so this is also what the roof should look like.
+                float lap = (i % 2 == 0) ? 0f : 0.045f;
+
+                Box("Roof_" + (side == 0 ? "L" : "R") + "_" + i, panels,
+                    new Vector3(sign * HalfW * 0.5f,
+                                EavesHeight + RidgeRise * 0.5f + 0.17f + lap, z),
+                    // 1.10, not 0.98. At 98 % each panel fell 2 % short of its
+                    // segment, leaving a ~5 cm slot between all 8 panels per
+                    // side -- the dashed lines of sunlight across the floor.
+                    // Real corrugated sheets overlap; these now do too.
+                    new Vector3(slopeLen, 0.06f, segLen * 1.06f),
+                    skylight ? sky : sheet)
+                    .transform.localEulerAngles = new Vector3(0f, 0f, sign * -slopeAng);
+            }
+        }
+
+        // Corrugation ribs on the underside, running down the slope.
+        int ribCount = Mathf.Max(1, Mathf.RoundToInt((HallDepth + 0.6f) / RoofRibSpacing));
+        for (int side = 0; side < 2; side++)
+        {
+            float sign = side == 0 ? -1f : 1f;
+            for (int i = 0; i < ribCount; i++)
+            {
+                float z = -(HallDepth + 0.6f) * 0.5f + RoofRibSpacing * (i + 0.5f);
+                BoxR("Rib_" + (side == 0 ? "L" : "R") + "_" + i, ribs,
+                     new Vector3(sign * HalfW * 0.5f, EavesHeight + RidgeRise * 0.5f + 0.11f, z),
+                     new Vector3(slopeLen, 0.045f, 0.07f), sheet,
+                     new Vector3(0f, 0f, sign * -slopeAng));
+            }
+        }
+    }
+
+
+    static void BuildGable(Transform g, string name, float z, Material mat)
+    {
+        Transform gg = Group(g, name);
+        const int steps = 4;
+        for (int i = 0; i < steps; i++)
+        {
+            float x0 = -HalfW + i * (HalfW / steps);
+            float x1 = -HalfW + (i + 1) * (HalfW / steps);
+            float h = RoofY((x0 + x1) * 0.5f) - EavesHeight;
+            if (h <= 0.01f) continue;
+            float w = x1 - x0;
+            Box(name + "_L" + i, gg, new Vector3((x0 + x1) * 0.5f, EavesHeight + h * 0.5f, z),
+                new Vector3(w, h, WallThickness), mat);
+            Box(name + "_R" + i, gg, new Vector3(-(x0 + x1) * 0.5f, EavesHeight + h * 0.5f, z),
+                new Vector3(w, h, WallThickness), mat);
+        }
+    }
+
+
+    static void BuildClutter(Transform g)
+    {
+        Material caseMat = M("Mat_Pub_WaterCase");
+        Material crate = M("Mat_Pub_CrateGreen");
+        Material litter = M("Mat_Pub_Litter");
+        Material amber = M("Mat_Pub_GlassAmber");
+        Material green = M("Mat_Pub_GlassGreen");
+
+        // Cardboard cartons of stock against both side walls.
+        //
+        // This used to be 9 columns up to 4 high on the left plus 4 columns of 2
+        // on the right -- as many as 44 flat-shaded cubes forming a wall of
+        // filler that read as scenery geometry rather than as goods. Now four on
+        // the left and three on the right, from a real model.
+        //
+        // Asset_CardboardBox has its origin at the centre of its BASE, so a box
+        // placed at y = 0 rests on the floor and a stacked one sits at exactly
+        // one box height. No half-buried boxes to hand-correct.
+        Transform cases = Group(g, "WaterCases");
+        Material carton = M("Mat_Pub_CardboardBox");
+        const float boxH = 0.55f;
+
+        Vector3[] cartons =
+        {
+            new Vector3(-HalfW + 0.42f, 0f,        HalfD - 2.20f),   // left, stacked pair
+            new Vector3(-HalfW + 0.42f, boxH,      HalfD - 2.20f),
+            new Vector3(-HalfW + 0.44f, 0f,        HalfD - 2.86f),   // left, stacked pair
+            new Vector3(-HalfW + 0.44f, boxH,      HalfD - 2.86f),
+            new Vector3(HalfW - 0.45f,  0f,        HalfD - 2.60f),   // right, stacked pair
+            new Vector3(HalfW - 0.45f,  boxH,      HalfD - 2.60f),
+            new Vector3(HalfW - 0.47f,  0f,        HalfD - 3.26f),   // right, single
+        };
+
+        for (int i = 0; i < cartons.Length; i++)
+        {
+            // A few degrees of yaw so a stack looks set down rather than placed.
+            GameObject box = Model("Asset_CardboardBox", cases, cartons[i],
+                                   Rand(-7f, 7f), carton);
+            if (box != null)
+                box.name = "Carton_" + i;
+            else
+                Box("Case_" + i, cases, cartons[i] + new Vector3(0f, boxH * 0.5f, 0f),
+                    new Vector3(0.55f, boxH, 0.55f), caseMat);
+        }
+
+        // Green crates by the counter.
+        //
+        // Clear of COUNTER_RETURN, the counter's left wing, which spans
+        // x -1.405 to -0.555 and z 5.4 to 7.2. The crates used to start at
+        // x = -1.4, so both columns stood inside it -- a crate half sunk into
+        // the counter, which is what that green box wedged in the corner was.
+        // A crate is 0.60 wide, so its right edge must stay left of -1.405:
+        // -2.60 and -1.94 both clear it, and they are still against the wing.
+        Transform crates = Group(g, "Crates");
+        for (int i = 0; i < 4; i++)
+        {
+            Vector3 p = new Vector3(-2.60f + (i % 2) * 0.66f, 0.155f + (i / 2) * 0.31f, HalfD - 3.5f);
+            Crate(crates, "Crate_" + i, p, crate, Rand(-6f, 6f));
+        }
+
+        // Bottles and glasses, placed ON real tables rather than scattered at
+        // table height (which would leave them floating in the walkways).
+        Transform loose = Group(g, "TableClutter");
+        int b = 0, gl = 0;
+        for (int i = 0; i < _tableTops.Count; i++)
+        {
+            Vector3 top = _tableTops[i];
+            if (_rng.NextDouble() < 0.35) continue;      // leave some tables clear
+
+            // Positions are sampled inside a CIRCLE now.
+            //
+            // They used to come from a +/-0.42 x +/-0.26 rectangle, which fitted
+            // the old 1.10 x 0.76 table. Against a disc of radius 0.367 a corner
+            // sample lands at r = 0.50 -- past the rim, in mid-air -- so on the
+            // first physics step it dropped to the floor. That is why the room
+            // filled with fallen bottles.
+            //
+            // 0.30 m of usable radius leaves room for the widest prop (0.045)
+            // plus a margin before the edge.
+            var placed = new List<Vector2>();
+
+            int bottles = RandInt(1, 4);
+            for (int j = 0; j < bottles; j++)
+            {
+                Vector3 p = top + OnTable(placed, 0.30f, 0.12f);
+                Bottle(loose, "TBottle_" + (b++), p, (j % 2 == 0) ? amber : green, 0.95f, true);
+            }
+            int glasses = RandInt(1, 3);
+            for (int j = 0; j < glasses; j++)
+            {
+                Vector3 p = top + OnTable(placed, 0.30f, 0.10f) + Vector3.up * 0.045f;
+                Transform gGroup = Group(loose, "Glass_" + (gl++));
+                gGroup.localPosition = p;
+
+                // Alternate glass tumblers and steel tumblers, as in the photos.
+                string gModel = (gl % 2 == 0) ? "Asset_Glass" : "Asset_SteelTumbler";
+                Material gMat = (gl % 2 == 0) ? litter : M("Mat_Pub_Metal");
+
+                if (Model(gModel, gGroup, Vector3.zero, Rand(0f, 360f), gMat,
+                          isStatic: false) == null)
+                {
+                    Tube("Glass_Body", gGroup, Vector3.zero, 0.065f, 0.10f, litter, Vector3.zero);
+                }
+
+                GrabbableUpright(gGroup, 0.040f, 0.10f, 0.25f);
+            }
+        }
+
+        Transform floorJunk = Group(g, "FloorLitter");
+        for (int i = 0; i < 10; i++)
+        {
+            float x = Rand(-HalfW + 1.2f, HalfW - 1.2f);
+            float z = Rand(-HalfD + 1.5f, HalfD - 4.5f);
+            BoxR("Litter_" + i, floorJunk, new Vector3(x, 0.006f, z),
+                 new Vector3(Rand(0.08f, 0.22f), 0.012f, Rand(0.08f, 0.20f)), litter,
+                 new Vector3(0f, Rand(0f, 180f), 0f));
+        }
+
+        // A couple of loose bottles on the floor.
+        for (int i = 0; i < 3; i++)
+        {
+            Bottle(floorJunk, "FloorBottle_" + i,
+                   new Vector3(Rand(-4f, 4f), 0.04f, Rand(-6f, 6f)), green, 0.95f, true);
+        }
     }
 }
