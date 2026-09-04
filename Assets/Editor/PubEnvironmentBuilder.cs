@@ -313,7 +313,23 @@ public static class PubEnvironmentBuilder
         Mat("Mat_Pub_ChairGreen", Rgb(58, 158, 62), 0.55f, 0f);
 
         // Service area --------------------------------------------------------
-Mat("Mat_Pub_GrilleTeal", Rgb(78, 168, 174), 0.42f, 0.30f);
+        // Service cage: painted metal with rust patches and downward streaks,
+        // TINTED to the teal the cage has always been. Metal053B is pale grey,
+        // so untinted the cage would come out bare rusting steel and stop being
+        // the teal that reads as a TASMAC counter. Drop the tint argument for
+        // that look instead.
+        //
+        // No rotation needed: the rust streaks already run down the texture's V
+        // axis, and V maps to Y on the long faces of an upright bar -- so they
+        // run down the bars, which is the direction water does.
+        //
+        // ONE material for every cage member rather than one per size, unlike
+        // the brick and the timber. Those have a module the eye measures -- a
+        // brick course, a plank -- so a wrong scale is obvious. Fine rust on a
+        // 35 mm bar has none, and the cage would otherwise need eight materials.
+        MatTextured("Mat_Pub_GrilleTeal", "Assets/Textures/Grille.png", 0.34f,
+                    "Assets/Textures/Grille_Normal.png",
+                    tint: Rgb(78, 168, 174), tiling: new Vector2(1.0f, 2.5f));
         Mat("Mat_Pub_CoolerRed", Rgb(176, 32, 34), 0.48f, 0.10f);
         Mat("Mat_Pub_DarkWood", Rgb(64, 44, 32), 0.22f, 0f);
         MatTransparent("Mat_Pub_GlassClear", new Color(0.78f, 0.85f, 0.86f, 0.28f), 0.92f);

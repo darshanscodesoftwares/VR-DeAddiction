@@ -407,3 +407,25 @@ horizon shows above the 2.4 m compound walls.
 The previous painted sky (`Sky_Overcast.png`, 1774x887) is KEPT. Reverting is
 one constant: `PanoramaPath = SkyPainted`.
 
+
+## Service cage
+
+- Files: `Assets/Textures/Grille.png`, `Grille_Normal.png`
+- Source: **ambientCG "Metal 053 B"** — https://ambientcg.com/a/Metal053B
+- Licence: **CC0**. No attribution required; recorded for provenance.
+
+Painted metal with rust patches and downward streaks, replacing a flat teal
+colour on the cage bars, posts and rails.
+
+TINTED to the teal the cage has always been. Metal053B is pale grey, so untinted
+the cage comes out as bare rusting steel and stops reading as the painted teal
+that makes it a TASMAC counter. Dropping the tint argument gives that look.
+
+No rotation: the rust streaks already run down the texture's V axis, and V maps
+to Y on the long faces of an upright bar, so they run down the bars the way water
+does.
+
+One material for every cage member rather than one per size, unlike the brick and
+the timber. Those have a module the eye measures -- a brick course, a plank
+length -- so a wrong scale shows immediately. Fine rust on a 35 mm bar has no
+such module, and per-size materials would cost eight for this one cage.
