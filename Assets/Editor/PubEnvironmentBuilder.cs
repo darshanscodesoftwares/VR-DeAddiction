@@ -1069,6 +1069,29 @@ public static class PubEnvironmentBuilder
 
     /// Height of the roof underside at a given x (shallow gable, ridge at x = 0).
     /// <summary>
+    /// Where the exterior gooseneck lamps hang. One definition, because two
+    /// things need it: the lamps themselves, and TREE placement, which has to
+    /// keep canopies off them. A palm planted 1.75 m from the wall swallowed
+    /// ExtLight_R_Back entirely -- its fronds enclosed the lamp and sat 0.15 m
+    /// into the beam -- and from the yard that reads as a light that does not
+    /// work rather than a light behind a tree.
+    /// </summary>
+    static Vector3[] ExteriorLampMounts()
+    {
+        const float mountY = 2.95f;              // clear of the entrance head
+        float wt = WallThickness;
+        float endZ = HalfD - 2.5f;
+        return new[]
+        {
+            new Vector3(0f, mountY, -HalfD - wt),
+            new Vector3(-HalfW - wt, mountY, -endZ),
+            new Vector3(-HalfW - wt, mountY,  endZ),
+            new Vector3( HalfW + wt, mountY, -endZ),
+            new Vector3( HalfW + wt, mountY,  endZ),
+        };
+    }
+
+    /// <summary>
     /// Centre-line Z of truss <paramref name="i"/>. Fixtures hang from these,
     /// so they must come from the same expression the roof uses -- a fixture
     /// spaced by its own arithmetic hangs from nothing.
@@ -3087,9 +3110,16 @@ public static class PubEnvironmentBuilder
                 if (p.z < entFrontZ && Mathf.Abs(p.x) < pathHalfW + clearance)
                     continue;                                          // off the entrance path
 
+                // Canopy radius plus air: a palm is 3.4 m across, so a trunk
+                // any closer than this puts fronds over the lamp.
+                foreach (Vector3 lamp in ExteriorLampMounts())
+                    if (Vector2.Distance(new Vector2(p.x, p.z), new Vector2(lamp.x, lamp.z)) < 4.2f)
+                        goto rejected;
+
                 ok = true;
                 foreach (Vector3 q in trunks)
                     if (Vector3.Distance(p, q) < 5f) { ok = false; break; }
+                rejected: ;
             }
             if (!ok)
                 continue;
@@ -3164,20 +3194,13 @@ public static class PubEnvironmentBuilder
         // vertical wall and leaves it reading as a flat dark slab -- these give
         // the brickwork something to catch.
         Transform extLights = Group(g, "ExteriorLights");
-        float wt = WallThickness;
-        const float mountY = 2.95f;          // clear of the 2.6 m entrance head
-        float endZ = HalfD - 2.5f;
-
-        WallLight(extLights, "ExtLight_Entrance",
-                  new Vector3(0f, mountY, -HalfD - wt), Vector3.back);
-        WallLight(extLights, "ExtLight_L_Front",
-                  new Vector3(-HalfW - wt, mountY, -endZ), Vector3.left);
-        WallLight(extLights, "ExtLight_L_Back",
-                  new Vector3(-HalfW - wt, mountY, endZ), Vector3.left);
-        WallLight(extLights, "ExtLight_R_Front",
-                  new Vector3(HalfW + wt, mountY, -endZ), Vector3.right);
-        WallLight(extLights, "ExtLight_R_Back",
-                  new Vector3(HalfW + wt, mountY, endZ), Vector3.right);
+        Vector3[] lamps = ExteriorLampMounts();
+        string[] lampNames = { "ExtLight_Entrance", "ExtLight_L_Front", "ExtLight_L_Back",
+                               "ExtLight_R_Front", "ExtLight_R_Back" };
+        Vector3[] lampOut = { Vector3.back, Vector3.left, Vector3.left,
+                              Vector3.right, Vector3.right };
+        for (int i = 0; i < lamps.Length; i++)
+            WallLight(extLights, lampNames[i], lamps[i], lampOut[i]);
 
         // ---- Compound walls ----
         Transform walls = Group(g, "CompoundWalls");
