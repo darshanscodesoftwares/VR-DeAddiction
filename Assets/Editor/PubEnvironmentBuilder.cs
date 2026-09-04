@@ -1215,6 +1215,8 @@ public static class PubEnvironmentBuilder
         Box("Skin_L", doorL,
             new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0.025f + skinT * 0.5f),
             new Vector3(doorLeafW, doorLeafH, skinT), doorBack);
+        SheetFrame(doorL, new Vector3(doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0f),
+                   doorLeafW, doorLeafH, 0.05f + skinT, M("Mat_Pub_SteelBlue"));
 
         // Right door (hinged on right jamb, partially open)
         Transform doorR = Group(g, "EntranceDoor_R");
@@ -1226,6 +1228,8 @@ public static class PubEnvironmentBuilder
         Box("Skin_R", doorR,
             new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, -(0.025f + skinT * 0.5f)),
             new Vector3(doorLeafW, doorLeafH, skinT), doorBack);
+        SheetFrame(doorR, new Vector3(-doorLeafW * 0.5f, doorLeafH * 0.5f + 0.03f, 0f),
+                   doorLeafW, doorLeafH, 0.05f + skinT, M("Mat_Pub_SteelBlue"));
 
         // Stepped gable infill at both ends, following the shallow pitch.
         BuildGable(g, "Gable_Back", HalfD + t * 0.5f, plaster);
@@ -2459,6 +2463,33 @@ public static class PubEnvironmentBuilder
     /// to hold.
     /// </summary>
     /// <summary>
+    /// A four-sided steel frame around a corrugated sheet leaf.
+    ///
+    /// Corrugated sheet on its own reads as a flat blue rectangle, because the
+    /// corrugations run one way and nothing crosses them. A real sheet door is
+    /// a welded frame with the sheet fixed to it, and the frame is what gives
+    /// the leaf an edge and a top and bottom rail to catch the light.
+    ///
+    /// The bars run PROUD of the sheet on both faces, so the frame reads from
+    /// either side -- these leaves are all seen from both.
+    /// </summary>
+    static void SheetFrame(Transform leaf, Vector3 centre, float w, float h,
+                           float sheetT, Material steel)
+    {
+        const float bar = 0.075f;                 // frame member width
+        float d = sheetT + 0.030f;                // 15 mm proud on each face
+
+        Box("Frame_Top", leaf, centre + new Vector3(0f, (h - bar) * 0.5f, 0f),
+            new Vector3(w, bar, d), steel);
+        Box("Frame_Bottom", leaf, centre + new Vector3(0f, -(h - bar) * 0.5f, 0f),
+            new Vector3(w, bar, d), steel);
+        Box("Frame_Left", leaf, centre + new Vector3(-(w - bar) * 0.5f, 0f, 0f),
+            new Vector3(bar, h - bar * 2f, d), steel);
+        Box("Frame_Right", leaf, centre + new Vector3((w - bar) * 0.5f, 0f, 0f),
+            new Vector3(bar, h - bar * 2f, d), steel);
+    }
+
+    /// <summary>
     /// One gooseneck fixture on an exterior wall, plus the light it casts.
     ///
     /// <paramref name="outward"/> is the wall's outward normal, which sets both
@@ -3408,6 +3439,8 @@ public static class PubEnvironmentBuilder
             new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f,
                         -(0.0225f + gateSkinT * 0.5f)),
             new Vector3(leafW, leafH, gateSkinT), gateBack);
+        SheetFrame(leafL, new Vector3(leafW * 0.5f, leafH * 0.5f + 0.02f, 0f),
+                   leafW, leafH, 0.045f + gateSkinT, steel);
 
         // Right leaf - hinged on right post, swung ~20 deg open
         Transform leafR = Group(leaves, "Leaf_R");
@@ -3420,6 +3453,8 @@ public static class PubEnvironmentBuilder
             new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f,
                         -(0.0225f + gateSkinT * 0.5f)),
             new Vector3(leafW, leafH, gateSkinT), gateBack);
+        SheetFrame(leafR, new Vector3(-leafW * 0.5f, leafH * 0.5f + 0.02f, 0f),
+                   leafW, leafH, 0.045f + gateSkinT, steel);
 
         // ---- Utility pole ----
         Transform utilPole = Group(g, "UtilityPole");
