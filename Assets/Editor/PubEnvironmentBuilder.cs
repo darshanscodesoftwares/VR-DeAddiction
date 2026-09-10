@@ -1115,6 +1115,130 @@ public static class PubEnvironmentBuilder
         };
     }
 
+    // ---- Yard relief -------------------------------------------------------
+    //
+    // The yard is not flat ground with a texture on it any more: it is a mesh
+    // with real undulation, so mounds break the horizon against the compound
+    // wall and plants sit in dips rather than on a plane.
+    //
+    // Where the relief is ALLOWED is the important part. Walking over a bump
+    // lifts the camera vertically, and vertical head motion the body did not
+    // cause is a strong nausea trigger -- the same class of problem as smooth
+    // versus snap turning, and this is a clinical tool. So the relief is masked
+    // OFF along the gate-to-door route, around the tables and under the
+    // building, and reaches full height only out at the walls and corners where
+    // the vegetation already clusters and nobody walks.
+
+    const float YardBumpHeight = 0.13f;   // metres, peak-to-trough at full mask
+    const float YardCell       = 0.45f;   // mesh resolution
+
+    /// <summary>
+    /// 0 where the ground must stay dead flat, 1 where relief is unrestricted,
+    /// with a smooth ramp between so there is no crease at the boundary.
+    /// </summary>
+    static float YardBumpMask(float x, float z)
+    {
+        // Flat under and just outside the building -- its floor is a separate
+        // flat slab and relief here would poke through it.
+        float bx = Mathf.Abs(x) - (HalfW + WallThickness);
+        float bz = Mathf.Abs(z) - (HalfD + WallThickness);
+        float outsideBuilding = Mathf.Max(bx, bz);          // <0 means inside
+        float m = Mathf.Clamp01(outsideBuilding / 1.6f);
+
+        // Flat down the entrance walk, and for a margin either side of it.
+        if (z < -(HalfD + WallThickness))
+        {
+            float fromPath = Mathf.Abs(x) - 2.4f;
+            m = Mathf.Min(m, Mathf.Clamp01(fromPath / 1.8f));
+        }
+
+        // Flat through the gate itself, so the threshold is not a step.
+        float gate = new Vector2(x, z - YardFrontZ).magnitude - GateOpeningW * 0.5f;
+        m = Mathf.Min(m, Mathf.Clamp01(gate / 2.0f));
+
+        return Mathf.SmoothStep(0f, 1f, m);
+    }
+
+    /// <summary>
+    /// Ground height at a point. Everything placed on the yard samples this, so
+    /// plants sit ON the relief instead of on the plane the relief replaced.
+    /// </summary>
+    static float YardHeight(float x, float z)
+    {
+        float m = YardBumpMask(x, z);
+        if (m <= 0.0001f)
+            return 0f;
+
+        // Two octaves: broad mounds, then a finer break-up so the mounds do not
+        // read as a regular swell.
+        float broad = Mathf.PerlinNoise(x * 0.17f + 11.3f, z * 0.17f + 4.7f) - 0.5f;
+        float fine  = Mathf.PerlinNoise(x * 0.61f + 31.1f, z * 0.61f + 19.9f) - 0.5f;
+        return (broad + fine * 0.35f) * 2f * YardBumpHeight * m;
+    }
+
+    /// <summary>
+    /// The yard surface as a displaced grid, with a collider to walk on.
+    /// </summary>
+    static GameObject YardSurface(Transform parent, float width, float depth,
+                                  float centreZ, float baseY, Material mat)
+    {
+        int nx = Mathf.Max(2, Mathf.RoundToInt(width / YardCell));
+        int nz = Mathf.Max(2, Mathf.RoundToInt(depth / YardCell));
+        var verts = new Vector3[(nx + 1) * (nz + 1)];
+        var uvs = new Vector2[verts.Length];
+        var tris = new int[nx * nz * 6];
+
+        for (int iz = 0; iz <= nz; iz++)
+        {
+            for (int ix = 0; ix <= nx; ix++)
+            {
+                float u = (float)ix / nx, v = (float)iz / nz;
+                float x = -width * 0.5f + u * width;
+                float z = centreZ - depth * 0.5f + v * depth;
+                int k = iz * (nx + 1) + ix;
+                verts[k] = new Vector3(x, baseY + YardHeight(x, z), z);
+                // UVs 0-1 across the yard, so the material's existing tiling
+                // keeps the pebbles at the size it was already set for.
+                uvs[k] = new Vector2(u, v);
+            }
+        }
+
+        int ti = 0;
+        for (int iz = 0; iz < nz; iz++)
+        {
+            for (int ix = 0; ix < nx; ix++)
+            {
+                int a = iz * (nx + 1) + ix, b = a + 1;
+                int c = a + nx + 1, d = c + 1;
+                tris[ti++] = a; tris[ti++] = c; tris[ti++] = b;
+                tris[ti++] = b; tris[ti++] = c; tris[ti++] = d;
+            }
+        }
+
+        Mesh mesh = new Mesh { name = "YardSurface" };
+        mesh.indexFormat = verts.Length > 65000
+            ? UnityEngine.Rendering.IndexFormat.UInt32
+            : UnityEngine.Rendering.IndexFormat.UInt16;
+        mesh.vertices = verts;
+        mesh.uv = uvs;
+        mesh.triangles = tris;
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+
+        GameObject go = new GameObject("YardGround");
+        go.transform.SetParent(parent, false);
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        go.AddComponent<MeshRenderer>().sharedMaterial = Shade(mat);
+        // Non-convex mesh collider: fine for static geometry, and the player
+        // needs to walk the relief rather than a flat plane under it.
+        go.AddComponent<MeshCollider>().sharedMesh = mesh;
+        go.isStatic = true;
+        _objectCount++;
+        Debug.Log($"[PubEnvironment] Yard surface: {nx}x{nz} cells, " +
+                  $"{tris.Length / 3} triangles, bumps to {YardBumpHeight:F2} m.");
+        return go;
+    }
+
     /// <summary>
     /// Centre-line Z of truss <paramref name="i"/>. Fixtures hang from these,
     /// so they must come from the same expression the roof uses -- a fixture
@@ -2978,8 +3102,7 @@ public static class PubEnvironmentBuilder
         // Compound yard (dirt, slightly below building floor to avoid z-fighting)
         float yardX = cHW * 2f + t * 2f + 0.5f;
         float yardZ = cDep + t * 2f + 0.5f;
-        Box("YardGround", ground, new Vector3(0f, -0.04f, cCZ),
-            new Vector3(yardX, 0.06f, yardZ), dirt, true);
+        YardSurface(ground, yardX, yardZ, cCZ, -0.01f, dirt);
 
         // 2.8 m per repeat, because that is the real-world size ambientCG
         // captured. Matching it puts the pebbles at life size instead of at
@@ -3091,8 +3214,12 @@ public static class PubEnvironmentBuilder
                     // ground shows daylight under its outer leaves. Real plants
                     // grow out of the soil, so they are set into it.
                     p = new Vector3(
-                        VRand(-yardX * 0.5f + 0.7f, yardX * 0.5f - 0.7f), GroundSink,
+                        VRand(-yardX * 0.5f + 0.7f, yardX * 0.5f - 0.7f), 0f,
                         VRand(cCZ - yardZ * 0.5f + 0.7f, cCZ + yardZ * 0.5f - 0.7f));
+                    // Sit on the RELIEF, not on the plane it replaced. The yard
+                    // is a displaced mesh now, so a fixed height leaves plants
+                    // buried in mounds and hanging over dips.
+                    p.y = YardHeight(p.x, p.z) + GroundSink;
                     found = Mathf.Abs(p.x) > bldHalfW || Mathf.Abs(p.z) > bldHalfD;
                 }
                 if (!found)
@@ -3168,9 +3295,9 @@ public static class PubEnvironmentBuilder
             for (int attempt = 0; attempt < 200 && !ok; attempt++)
             {
                 p = new Vector3(
-                    (float)(treeRNG.NextDouble() * yardX - yardX * 0.5f),
-                    TreeSink,
+                    (float)(treeRNG.NextDouble() * yardX - yardX * 0.5f), 0f,
                     (float)(treeRNG.NextDouble() * yardZ - yardZ * 0.5f) + cCZ);
+                p.y = YardHeight(p.x, p.z) + TreeSink;
 
                 if (Mathf.Abs(p.x) < bldHalfW + clearance &&
                     Mathf.Abs(p.z) < bldHalfD + clearance) continue;   // off the building
@@ -3280,14 +3407,16 @@ public static class PubEnvironmentBuilder
                 {
                     Vector2 c = corners[bushRNG.Next(corners.Count)];
                     // pull IN from the corner, never through it
-                    p = new Vector3(c.x - Mathf.Sign(c.x) * BRand(0.8f, 2.9f), GroundSink,
+                    p = new Vector3(c.x - Mathf.Sign(c.x) * BRand(0.8f, 2.9f), 0f,
                                     c.y - Mathf.Sign(c.y - cCZ) * BRand(0.8f, 2.9f));
                 }
                 else
                 {
-                    p = new Vector3(BRand(-yardX * 0.5f + 1.1f, yardX * 0.5f - 1.1f), GroundSink,
+                    p = new Vector3(BRand(-yardX * 0.5f + 1.1f, yardX * 0.5f - 1.1f), 0f,
                                     BRand(cCZ - yardZ * 0.5f + 1.1f, cCZ + yardZ * 0.5f - 1.1f));
                 }
+
+                p.y = YardHeight(p.x, p.z) + GroundSink;
 
                 if (Mathf.Abs(p.x) <= bldHalfW && Mathf.Abs(p.z) <= bldHalfD) continue;
                 if (Mathf.Abs(p.x) > yardX * 0.5f - 1.0f) continue;
