@@ -26,7 +26,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT_DIR = os.path.join(PROJECT, "Assets", "Models")
 
-SRC = os.path.expanduser("~/Downloads/source/Glass.fbx")
+# Source lives in the repo, not in a Downloads folder. It used to be read
+# from ~/Downloads, which meant this script only ran on the one machine the
+# asset was downloaded to -- the exported model was committed but the thing
+# it came from was not, so the conversion could never be re-run elsewhere.
+SRC = os.path.join(PROJECT, "BlenderAssets", "source", "TableGlass.fbx")
 
 OUTER = "Cylinder"          # the shell with a base and outward normals
 INNER = "Cylinder.001"      # inner wall, discarded -- Solidify replaces it

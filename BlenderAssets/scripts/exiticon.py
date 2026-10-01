@@ -20,8 +20,11 @@ import bpy, os, sys, math
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT_DIR = os.path.join(PROJECT, "Assets", "Models")
-SRC = os.path.expanduser(
-    "~/Downloads/3d-icons-closeoff/extracted/close/3D.fbx")
+# Source lives in the repo, not in a Downloads folder. It used to be read
+# from ~/Downloads, which meant this script only ran on the one machine the
+# asset was downloaded to -- the exported model was committed but the thing
+# it came from was not, so the conversion could never be re-run elsewhere.
+SRC = os.path.join(PROJECT, "BlenderAssets", "source", "ExitIcon.fbx")
 
 KEEP = "X_button"
 TARGET_WIDTH = 0.10        # a little wider than the 0.075 cube it replaces

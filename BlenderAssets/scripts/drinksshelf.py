@@ -85,7 +85,7 @@ def main():
 
 def render_faces(me, out):
     """One picture looking at each face, so the open side can be identified."""
-    tex = "/Users/scodeuser/Downloads/supermarket-drinks-shelf-asset/textures/Supermarket Drinks Shelf Color 2k.jpeg"
+    tex = os.path.join(PROJECT, "BlenderAssets", "source", "DrinksShelf_Color.jpeg")
     mat = bpy.data.materials.new("Shelf"); mat.use_nodes = True
     b = mat.node_tree.nodes["Principled BSDF"]
     if os.path.exists(tex):

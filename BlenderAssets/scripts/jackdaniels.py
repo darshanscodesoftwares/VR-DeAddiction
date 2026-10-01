@@ -32,9 +32,11 @@ PROJECT = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT_DIR = os.path.join(PROJECT, "Assets", "Models")
 TEX_DIR = os.path.join(PROJECT, "Assets", "Textures")
 
-SRC = os.path.expanduser(
-    "~/Downloads/jack-daniels-whiskey-no7-bottle/extracted/source/"
-    "Jack Daniels Bottle C6 SF3.fbx")
+# Source lives in the repo, not in a Downloads folder. It used to be read
+# from ~/Downloads, which meant this script only ran on the one machine the
+# asset was downloaded to -- the exported model was committed but the thing
+# it came from was not, so the conversion could never be re-run elsewhere.
+SRC = os.path.join(PROJECT, "BlenderAssets", "source", "JackDaniels.fbx")
 
 # Real bottle height. The source imports at 1.83 m -- about six times life
 # size, which would arrive in the bar as a bottle as tall as the patient.

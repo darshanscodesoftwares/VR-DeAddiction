@@ -23,7 +23,11 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT_DIR = os.path.join(PROJECT, "Assets", "Models")
-SRC = os.path.expanduser("~/Downloads/source 2/chair.fbx")
+# Source lives in the repo, not in a Downloads folder. It used to be read
+# from ~/Downloads, which meant this script only ran on the one machine the
+# asset was downloaded to -- the exported model was committed but the thing
+# it came from was not, so the conversion could never be re-run elsewhere.
+SRC = os.path.join(PROJECT, "BlenderAssets", "source", "PlasticChair.fbx")
 
 X_LO, X_HI = 1.20, 2.06     # the third cluster, from the X histogram
 TARGET_TRIS = 2000
