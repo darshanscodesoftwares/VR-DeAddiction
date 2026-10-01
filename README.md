@@ -123,9 +123,19 @@ if the assets themselves change.
 
 ## The last known-good build
 
-`VRDeAddiction-2026-08-20-final.apk` was saved to `~/Downloads/` before the
-project folder was deleted (34 MB, sha256 `3e099a1e…`). It can be sideloaded
-directly with step 6 without rebuilding anything.
+`Builds/VRDeAddiction.apk`, built 2026-09-05 from commit `615a963` (53 MB,
+sha256 `556c1836fd21…`). Sideload it with step 6; nothing needs rebuilding.
+
+Check the hash before trusting a copy. An older `VRDeAddiction-2026-08-20-final.apk`
+is still floating around in `~/Downloads/` and in chat history: despite the name it
+predates the brick walls, the corrugated doors, the ceiling lamps and fans, the
+exterior lights, all the yard planting, the 4K sky and the uneven ground. It is
+34 MB against 53 MB, which is the quickest way to tell them apart.
+
+Builds are DEBUG-SIGNED with a key that lives on the machine that built them, not
+in this repo. A build made on a different machine therefore will not install over
+one made here -- Android rejects the signature change. Uninstall the app from the
+headset first, then install. Nothing else is affected.
 
 ## What is deliberately not in this repo
 
